@@ -1,1 +1,15 @@
+# python
 __pycache__/
+.venv/
+keeper/keeper-key.json
+# node / next
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+# local
+.claude/
+.vercel/
+.env*
+.DS_Store

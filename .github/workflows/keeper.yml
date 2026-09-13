@@ -1,0 +1,42 @@
+name: keeper
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # every 5 minutes, best-effort (GitHub may delay or skip runs)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and simulate executions without sending"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# One keeper at a time. Orders are written through the GitHub Contents API, not git push.
+concurrency:
+  group: keeper
+  cancel-in-progress: false
+
+jobs:
+  keeper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -q -r keeper/requirements.txt
+
+      - name: Check orders and execute regime-aware stops
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          KEEPER_SECRET_KEY: ${{ secrets.KEEPER_SECRET_KEY }}
+          RPC_URL: ${{ vars.RPC_URL }}
+          KEEPER_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+          GIT_AUTHOR_NAME: Lydia Solomon
+          GIT_AUTHOR_EMAIL: lydiasolomon137@gmail.com
+        run: python keeper/keeper.py

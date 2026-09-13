@@ -1,0 +1,6 @@
+{
+  "_comment": "Single source of truth for regime-aware execution. Read by keeper/keeper.py and by the web app for display. Session names match recorder.session_state().",
+  "open":      { "hours": "Mon-Fri 09:30-16:00 ET",          "confirmations": 1, "slippageBps": 50,  "splitOnImpact": false },
+  "overnight": { "hours": "Mon-Fri outside 09:30-16:00 ET",  "confirmations": 2, "slippageBps": 150, "splitOnImpact": false },
+  "weekend":   { "hours": "Sat-Sun",                          "confirmations": 3, "slippageBps": 300, "splitOnImpact": true  }
+}
