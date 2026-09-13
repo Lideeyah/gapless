@@ -1,14 +1,20 @@
 name: record
 
+# GitHub's cron is best-effort and, for this repository, fired three times in seven hours instead of
+# every five minutes. So each run records continuously for ~5h40m (jobs are capped at 6h), committing
+# every reading as it is taken, then dispatches the next run of itself. Cron remains only as a
+# backstop that restarts the chain if a hand-off ever fails.
+
 on:
   schedule:
-    - cron: "*/5 * * * *"   # every 5 minutes, best-effort (GitHub may delay or skip runs)
+    - cron: "7,37 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
+  actions: write   # to dispatch the next run
 
-# One recorder at a time; a late run queues behind the current one rather than overlapping it.
+# Exactly one recorder at a time; a queued run waits for the current one instead of overlapping it.
 concurrency:
   group: record
   cancel-in-progress: false
@@ -16,7 +22,7 @@ concurrency:
 jobs:
   record:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
 
@@ -24,14 +30,24 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Record prices (never fails the run; fetch errors become source=error rows)
-        run: python recorder.py
-
-      - name: Commit and push
+      - name: Record every 5 minutes for ~5h40m, committing each reading as it is taken
         run: |
           git config user.name "Lydia Solomon"
           git config user.email "lydiasolomon137@gmail.com"
-          git add data/prices.csv
-          git commit -m "record $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          # Push race: if the remote moved, rebase onto it (CSV uses the union merge driver) and retry once.
-          git push || (git pull --rebase origin "${GITHUB_REF_NAME}" && git push)
+          end=$((SECONDS + 5*3600 + 40*60))
+          while [ "$SECONDS" -lt "$end" ]; do
+            python recorder.py || echo "recorder exited non-zero; continuing"
+            git add data/prices.csv
+            git commit -qm "record $(date -u +%Y-%m-%dT%H:%M:%SZ)" || true
+            # Push race: if the branch moved (keeper or app commits), rebase and retry once.
+            git push -q origin HEAD:main || (git pull --rebase -q origin main && git push -q origin HEAD:main) || echo "push failed; the reading stays committed locally and rides with the next push"
+            sleep $((300 - $(date +%s) % 300))
+          done
+
+      - name: Hand off to the next run (unless one is already queued)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          queued=$(gh run list --workflow=record.yml --status queued --json databaseId --jq 'length')
+          if [ "$queued" = "0" ]; then gh workflow run record.yml --ref main; else echo "a run is already queued; not dispatching"; fi
