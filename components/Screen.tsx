@@ -11,11 +11,22 @@ import type { Order } from "@/lib/github";
 import { fmtPct, fmtQty, fmtTs, fmtUsd, short, solscanTx } from "@/lib/format";
 
 const KEEPER = process.env.NEXT_PUBLIC_KEEPER_PUBKEY ?? "";
+const LIVE = ["armed", "triggered", "executing", "failed"];
+/** Decimal string -> (integer numerator, power-of-ten scale). No floats. */
+function scaled(str: string): [bigint, bigint] {
+  const [i, f = ""] = str.split(".");
+  return [BigInt((i || "0") + f), 10n ** BigInt(f.length)];
+}
+/** Raw units for a typed UI quantity on a scaled-UI mint: ui * 10^dec / multiplier, all in integers. */
+function rawFromUi(ui: string, decimals: number, multiplier: string): bigint {
+  const [q, qs] = scaled(ui); const [m, ms] = scaled(multiplier);
+  return (q * 10n ** BigInt(decimals) * ms) / (qs * m);
+}
 const MEMO_PROGRAM = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
 const RECORDED: Record<string, string> = { NVDAx: "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh", TSLAx: "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB", SPYx: "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W" };
 
 type History = { rows: Row[]; stats: Stats; gap: Gap | null; regimes: Record<string, { hours: string; confirmations: number; slippageBps: number; splitOnImpact: boolean }> };
-type Holding = { mint: string; ticker: string; name: string; tokenAccount: string; decimals: number; raw: string; ui: number; delegate: string | null; delegatedRaw: string; price: number | null; multiplier: number };
+type Holding = { mint: string; ticker: string; name: string; tokenAccount: string; decimals: number; raw: string; ui: number; uiString: string; delegate: string | null; delegatedRaw: string; price: number | null; multiplier: string };
 type Phase = { kind: "set" | "revoke"; state: "confirm" | "inflight" | "done" | "error"; step?: string; detail?: string; sigs?: string[] };
 
 export default function Screen() {
@@ -60,7 +71,7 @@ export default function Screen() {
       for (const t of tokens as { mint: string; symbol: string; name: string; decimals: number }[]) {
         const a = owned.find((o) => o.info.mint === t.mint)!;
         list.push({ mint: t.mint, ticker: t.symbol, name: t.name, tokenAccount: a.acct, decimals: t.decimals, raw: a.info.tokenAmount.amount, ui: Number(a.info.tokenAmount.uiAmountString ?? 0),
-          delegate: a.info.delegate ?? null, delegatedRaw: a.info.delegatedAmount?.amount ?? "0", price: prices?.[t.mint]?.price ?? null, multiplier: prices?.[t.mint]?.multiplier ?? 1 });
+          uiString: String(a.info.tokenAmount.uiAmountString ?? "0"), delegate: a.info.delegate ?? null, delegatedRaw: a.info.delegatedAmount?.amount ?? "0", price: prices?.[t.mint]?.price ?? null, multiplier: String(prices?.[t.mint]?.multiplier ?? 1) });
       }
       setHoldings(list); setHoldErr(null);
       if (list.length && !list.some((h) => h.ticker === sel)) setSel(list[0].ticker);
@@ -75,23 +86,24 @@ export default function Screen() {
   const onConnect = () => { if (!phantom) { window.open("https://phantom.app", "_blank"); return; } select(phantom.adapter.name); setWantConnect(true); };
 
   const holding = holdings?.find((h) => h.ticker === sel) ?? null;
-  const live = orders.filter((o) => o.status === "armed" || o.status === "partial");
-  const fired = orders.filter((o) => o.status === "fired");
+  const live = orders.filter((o) => LIVE.includes(o.status));
+  const fired = orders.filter((o) => o.status === "filled");
   const activeForSel = live.find((o) => o.ticker === sel) ?? null;
   const floor = Number(floorText);
-  const floorForChart = activeForSel ? activeForSel.floorUsd : Number.isFinite(floor) && floor > 0 ? floor : null;
+  const floorForChart = activeForSel ? Number(activeForSel.floor_price_usd) : Number.isFinite(floor) && floor > 0 ? floor : null;
   const selMint = holding?.mint ?? RECORDED[sel] ?? null;
   const price = holding?.price ?? (selMint && history ? history.stats.perTicker[sel]?.last ?? null : null);
   const rows = history?.rows ?? [];
   const lastSession = history?.stats.currentSession ?? null;
   const regime = lastSession && history ? history.regimes[lastSession] : null;
 
-  useEffect(() => { if (holding && !qtyText) setQtyText(String(holding.ui)); }, [holding, qtyText]);
+  useEffect(() => { if (holding && !qtyText) setQtyText(holding.uiString); }, [holding, qtyText]);
 
   // ------------------------------------------------------------------ actions
   const setLabel = !connected ? "connect wallet to set a floor" : !storeOk ? "order store is not configured on the server" : !KEEPER ? "keeper delegate is not configured on the server"
     : holdings === null ? "reading holdings" : !holding ? "hold an xStock to set a floor" : activeForSel ? `revoke the ${sel} floor before setting a new one` : !(floor > 0) ? "enter a floor to arm" : price !== null && floor >= price ? "floor is at or above the current price; it would fire on the next run" : null;
   const canSet = setLabel === null || (setLabel?.startsWith("floor is at or above") ?? false);
+  const floorStr = floorText.replace(/\.$/, "");
 
   async function confirmWith(tx: Transaction, step: string) {
     setPhase((p) => ({ ...(p as Phase), state: "inflight", step }));
@@ -105,18 +117,20 @@ export default function Screen() {
   async function doSet() {
     if (!holding || !publicKey) return;
     try {
-      const qty = Number(qtyText);
-      const raw = qty >= holding.ui ? BigInt(holding.raw) : BigInt(Math.floor((qty / holding.multiplier) * 10 ** holding.decimals));
+      if (!/^\d+(\.\d+)?$/.test(qtyText) || !/^\d+(\.\d+)?$/.test(floorStr)) throw new Error("quantity and floor must be plain decimals");
+      let raw = rawFromUi(qtyText, holding.decimals, holding.multiplier);
+      if (qtyText === holding.uiString || raw > BigInt(holding.raw)) raw = BigInt(holding.raw); // full balance: use the exact on-chain amount
       if (raw <= 0n) throw new Error("quantity must be positive");
+      const id = crypto.randomUUID();
       const delegate = new PublicKey(KEEPER);
       const approveSig = await confirmWith(new Transaction().add(createApproveCheckedInstruction(new PublicKey(holding.tokenAccount), new PublicKey(holding.mint), delegate, publicKey, raw, holding.decimals, [], TOKEN_2022_PROGRAM_ID)), "1 of 2 · approve delegation in Phantom");
-      const memo = JSON.stringify({ gapless: 1, ticker: holding.ticker, mint: holding.mint, tokenAccount: holding.tokenAccount, quantityRaw: raw.toString(), floorUsd: floor, delegate: KEEPER, approveSig });
+      const memo = JSON.stringify({ gapless: 1, id, mint: holding.mint, token_account: holding.tokenAccount, quantity_raw: raw.toString(), floor_price_usd: floorStr, delegate: KEEPER, delegation_sig: approveSig });
       const orderSig = await confirmWith(new Transaction().add(new TransactionInstruction({ keys: [{ pubkey: publicKey, isSigner: true, isWritable: false }], programId: MEMO_PROGRAM, data: Buffer.from(memo, "utf8") })), "2 of 2 · sign the order record in Phantom");
       setPhase({ kind: "set", state: "inflight", step: "recording the order" });
-      const r = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ owner, ticker: holding.ticker, mint: holding.mint, tokenAccount: holding.tokenAccount, decimals: holding.decimals, quantityRaw: raw.toString(), quantityUi: Number(raw) / 10 ** holding.decimals * holding.multiplier, floorUsd: floor, approveSig, orderSig }) });
+      const r = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, owner_pubkey: owner, ticker: holding.ticker, mint: holding.mint, token_account: holding.tokenAccount, decimals: holding.decimals, quantity_raw: raw.toString(), floor_price_usd: floorStr, delegation_sig: approveSig, order_sig: orderSig }) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
-      setPhase({ kind: "set", state: "done", detail: `armed at ${fmtUsd(floor)}`, sigs: [approveSig, orderSig] });
+      setPhase({ kind: "set", state: "done", detail: `armed at ${fmtUsd(Number(floorStr))}`, sigs: [approveSig, orderSig] });
       setFloorText(""); await Promise.all([loadOrders(), loadHoldings()]);
     } catch (e) { setPhase({ kind: "set", state: "error", detail: (e as Error).message }); }
   }
@@ -124,7 +138,7 @@ export default function Screen() {
   async function doRevoke(o: Order) {
     if (!publicKey) return;
     try {
-      const sig = await confirmWith(new Transaction().add(createRevokeInstruction(new PublicKey(o.tokenAccount), publicKey, [], TOKEN_2022_PROGRAM_ID)), "revoke delegation in Phantom");
+      const sig = await confirmWith(new Transaction().add(createRevokeInstruction(new PublicKey(o.token_account), publicKey, [], TOKEN_2022_PROGRAM_ID)), "revoke delegation in Phantom");
       setPhase({ kind: "revoke", state: "inflight", step: "recording the cancellation" });
       const r = await fetch("/api/orders/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: o.id, owner, revokeSig: sig }) });
       const j = await r.json();
@@ -173,23 +187,23 @@ export default function Screen() {
           <div className="row"><span className="secondary" style={{ gridColumn: "1 / -1" }}>This wallet holds no xStocks. Gapless works on Token-2022 xStock balances (NVDAx, TSLAx, SPYx and the rest of the xStocks list). Buy one on any Solana DEX and it will appear here.</span></div>
         )}
         {holdings?.map((h) => {
-          const o = live.find((x) => x.tokenAccount === h.tokenAccount) ?? null;
-          const dist = o && h.price ? ((h.price - o.floorUsd) / h.price) * 100 : null;
+          const o = live.find((x) => x.token_account === h.tokenAccount) ?? null;
+          const dist = o && h.price ? ((h.price - Number(o.floor_price_usd)) / h.price) * 100 : null;
           const onChainArmed = Boolean(h.delegate && KEEPER && h.delegate === KEEPER && BigInt(h.delegatedRaw) > 0n);
           return (
             <div className="row fade" key={h.tokenAccount} style={{ opacity: 1 }}>
               <span><span className="num" style={{ fontSize: 28 }}>{h.ticker}</span><br /><span className="mono secondary">{short(h.mint)}</span></span>
               <span className="num" style={{ fontSize: 28 }}>{fmtQty(h.ui)}</span>
               <span className="num" style={{ fontSize: 28 }}>{h.price === null ? "—" : fmtUsd(h.price)}</span>
-              <span className="num" style={{ fontSize: 28, color: o ? "#1F4D3D" : undefined }}>{o ? fmtUsd(o.floorUsd) : "—"}</span>
+              <span className="num" style={{ fontSize: 28, color: o ? "#1F4D3D" : undefined }}>{o ? fmtUsd(Number(o.floor_price_usd)) : "—"}</span>
               <span>
                 {o ? (
                   <>
-                    <span style={{ color: "rgba(31,77,61,.4)" }}>armed</span>{o.status === "partial" ? <span className="secondary"> · partially filled</span> : null}
+                    <span style={{ color: "rgba(31,77,61,.4)" }}>{o.status === "armed" && o.fills.length ? "armed · partially filled" : o.status}</span>{o.status === "failed" ? <span className="secondary"> · retrying next run</span> : null}
                     <span className="secondary">{dist === null ? "" : ` · ${fmtPct(dist)} above floor`}</span>
-                    <br /><span className="mono secondary">{onChainArmed ? `delegated ${fmtQty(Number(h.delegatedRaw) / 10 ** h.decimals * h.multiplier)} on chain` : "delegation not visible on chain yet"}</span>
-                    {o.lastCheck ? <><br /><span className="mono secondary">{fmtTs(o.lastCheck.at)} · {o.lastCheck.decision}</span></> : <><br /><span className="mono secondary">not yet checked by the keeper</span></>}
-                    {closedLow !== null && h.ticker === sel ? <><br /><span className="mono secondary">closed-hours low in window {fmtUsd(closedLow)}{closedLow <= o.floorUsd ? " · reached this floor" : " · stayed above this floor"}</span></> : null}
+                    <br /><span className="mono secondary">{onChainArmed ? `delegated ${h.delegatedRaw} raw on chain · ${o.breach_count} consecutive breach${o.breach_count === 1 ? "" : "es"}` : "delegation not visible on chain yet"}</span>
+                    {o.last_decision ? <><br /><span className="mono secondary">{fmtTs(o.last_checked_at)} · {o.last_decision}</span></> : <><br /><span className="mono secondary">not yet checked by the keeper</span></>}
+                    {closedLow !== null && h.ticker === sel ? <><br /><span className="mono secondary">closed-hours low in window {fmtUsd(closedLow)}{closedLow <= Number(o.floor_price_usd) ? " · reached this floor" : " · stayed above this floor"}</span></> : null}
                   </>
                 ) : <span className="secondary">no floor set</span>}
               </span>
@@ -201,18 +215,18 @@ export default function Screen() {
           return (
             <div className="row" key={o.id}>
               <span><span className="num" style={{ fontSize: 28 }}>{o.ticker}</span><br /><span className="mono secondary">{short(o.mint)}</span></span>
-              <span className="num" style={{ fontSize: 28 }}>{fmtQty(o.quantityUi)}</span>
-              <span className="num" style={{ fontSize: 28 }} >{f ? fmtUsd(f.fillPriceUsd) : "—"}<br /><span className="mono secondary">fill</span></span>
-              <span className="num" style={{ fontSize: 28 }}>{fmtUsd(o.floorUsd)}</span>
+              <span className="num" style={{ fontSize: 28 }}>{o.quantity_raw}<br /><span className="mono secondary">raw units</span></span>
+              <span className="num" style={{ fontSize: 28 }} >{o.fill_price_usd ? fmtUsd(Number(o.fill_price_usd)) : "—"}<br /><span className="mono secondary">fill{o.fills.length > 1 ? `, ${o.fills.length} parts` : ""}</span></span>
+              <span className="num" style={{ fontSize: 28 }}>{fmtUsd(Number(o.floor_price_usd))}</span>
               <span>
-                <span className={confirmingRevoke ? "" : "ox"}>fired</span><span className="secondary"> · {f ? `${fmtTs(f.at)} · ${f.session}` : ""}</span>
-                <br />{f ? <a className="mono" href={solscanTx(f.signature)} target="_blank" rel="noreferrer">{short(f.signature)}</a> : <span className="mono secondary">no fill recorded</span>}
-                <span className="mono secondary"> · USDC sent to {short(o.owner)}</span>
+                <span className={confirmingRevoke ? "" : "ox"}>filled</span><span className="secondary"> · {f ? `${fmtTs(f.at)} · ${f.session}` : ""}</span>
+                <br />{o.fill_sig ? <a className="mono" href={solscanTx(o.fill_sig)} target="_blank" rel="noreferrer">{short(o.fill_sig)}</a> : <span className="mono secondary">no fill recorded</span>}
+                <span className="mono secondary"> · USDC sent to {short(o.owner_pubkey)}</span>
               </span>
             </div>
           );
         })}
-        {connected && live.filter((o) => !holdings?.some((h) => h.tokenAccount === o.tokenAccount)).map((o) => (
+        {connected && live.filter((o) => !holdings?.some((h) => h.tokenAccount === o.token_account)).map((o) => (
           <div className="row" key={o.id}><span className="secondary" style={{ gridColumn: "1 / -1" }}>{o.ticker} order {short(o.id)} is armed but its token account no longer shows a balance in this wallet.</span></div>
         ))}
         <div className="rule" />
@@ -232,12 +246,12 @@ export default function Screen() {
           </div>
         ) : confirmingRevoke && activeForSel ? (
           <div className="fade">
-            <p>Remove the {sel} floor at {fmtUsd(activeForSel.floorUsd)}? This signs an SPL revoke; the keeper can no longer move these tokens.</p>
+            <p>Remove the {sel} floor at {fmtUsd(Number(activeForSel.floor_price_usd))}? This signs an SPL revoke; the keeper can no longer move these tokens.</p>
             <p style={{ paddingTop: 24 }}><button className="btn btn-destructive" onClick={() => doRevoke(activeForSel)}>revoke delegation</button> <span className="faint"> · </span> <button className="btn btn-secondary" onClick={() => setPhase(null)}>keep it</button></p>
           </div>
         ) : phase?.kind === "set" && phase.state === "confirm" && holding ? (
           <div className="fade">
-            <p>Arm a floor at <span className="num" style={{ fontSize: 22 }}>{fmtUsd(floor)}</span> on {fmtQty(Number(qtyText))} {sel}. Two signatures: an SPL approve delegating up to that quantity to the keeper, and a memo recording the order. Tokens stay in your wallet.</p>
+            <p>Arm a floor at <span className="num" style={{ fontSize: 22 }}>{fmtUsd(floor)}</span> on {qtyText} {sel}. Two signatures: an SPL approve delegating up to that quantity to the keeper, and a memo recording the order. Tokens stay in your wallet.</p>
             {regime && <p className="secondary" style={{ paddingTop: 24 }}>Right now the recorder’s last reading is in the {lastSession} regime: {regime.confirmations} consecutive reading{regime.confirmations === 1 ? "" : "s"} at or below the floor and {regime.slippageBps} bps slippage tolerance{regime.splitOnImpact ? ", split across runs if price impact exceeds it" : ""}.</p>}
             <p style={{ paddingTop: 24 }}><button className="btn btn-primary" onClick={doSet}>sign and arm</button> <span className="faint"> · </span> <button className="btn btn-secondary" onClick={() => setPhase(null)}>back</button></p>
           </div>

@@ -1,12 +1,15 @@
 // Order store: data/orders.json in this repository, read and written through the GitHub Contents
 // API with optimistic concurrency (sha). The keeper writes the same file the same way.
-export type Fill = { at: string; signature: string; inRaw: string; outUsdcRaw: string; fillPriceUsd: number; session: string };
+// Field names follow the system architecture (§5). All token amounts are raw integer strings.
+export type Fill = { at: string; signature: string; in_raw: string; out_usdc_raw: string; fill_price_usd: string; session: string };
+export type Status = "armed" | "triggered" | "executing" | "filled" | "failed" | "revoked";
 export type Order = {
-  id: string; owner: string; ticker: string; mint: string; tokenAccount: string; decimals: number;
-  quantityRaw: string; quantityUi: number; remainingRaw: string; floorUsd: number; delegate: string;
-  status: "armed" | "partial" | "fired" | "cancelled"; createdAt: string; approveSig: string; orderSig: string;
-  revokeSig?: string | null; breachCount: number; fills?: Fill[];
-  lastCheck?: { at: string; session: string; price: number | null; decision: string } | null;
+  id: string; owner_pubkey: string; mint: string; ticker: string; token_account: string; quantity_raw: string; decimals: number;
+  floor_price_usd: string; status: Status; breach_count: number; last_checked_at: string | null; delegation_sig: string;
+  fill_sig: string | null; fill_price_usd: string | null; filled_at: string | null; failure_reason: string | null; created_at: string;
+  // additional, needed by this implementation
+  order_sig: string; delegate: string; remaining_raw: string; fills: Fill[]; last_decision: string | null; last_session: string | null;
+  last_price_usd: string | null; pending_sig: string | null; pending_amount_raw: string | null; pending_since: string | null; revoke_sig: string | null;
 };
 type Store = { orders: Order[] };
 
@@ -25,11 +28,10 @@ export async function readOrders(): Promise<{ store: Store; sha: string | null }
   const res = await fetch(`${API}?ref=main`, { headers: headers(), cache: "no-store" });
   if (!res.ok) throw new Error(`orders.json read failed: HTTP ${res.status}`);
   const meta = await res.json();
-  const store = JSON.parse(Buffer.from(meta.content, "base64").toString("utf8")) as Store;
-  return { store, sha: meta.sha };
+  return { store: JSON.parse(Buffer.from(meta.content, "base64").toString("utf8")) as Store, sha: meta.sha };
 }
 
-/** Read-modify-write with one retry if the file moved. */
+/** Read-modify-write with one retry if the file moved under us. */
 export async function updateOrders(mutate: (s: Store) => string): Promise<void> {
   if (!storeConfigured()) throw new Error("order store is not configured (GITHUB_TOKEN missing on the server)");
   for (let attempt = 0; attempt < 2; attempt++) {

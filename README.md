@@ -56,46 +56,79 @@ definitions of "weekend" that drift apart would poison every number on the site,
 
 **Chosen: Option B.** Orders are held off-chain, in `data/orders.json` in this repository.
 
-Reasoning: an Anchor program with PDA-held orders is the right answer in principle, but deploying
-and hardening one reliably, with the SPL delegation and Jupiter CPI wired through, would have consumed
-the build window and left the regime logic, the evidence pipeline and the interface half done. The
-order record is the least security-sensitive part of the system, because the thing that actually
-gives the keeper power over the user's tokens is the SPL `approve`, and that is on-chain regardless.
+Reasoning: an Anchor program with PDA-held orders is the right answer in principle, because the
+program could verify the price before permitting the transfer. It needs a trusted on-chain price
+source for xStocks mints, which is an unverified dependency, and deploying and hardening it in this
+window would have consumed the build. The order record is the least security-sensitive part of the
+system: what gives the keeper power over the user's tokens is the SPL `approve`, and that is on-chain
+regardless.
 
-What is on-chain and verifiable:
+**What the user signs.** An SPL Token-2022 `approveChecked` naming the keeper's public key as
+delegate on one specific token account, with a fixed maximum in raw token units. Native token
+program behaviour, not custom code. Then a Memo transaction carrying the order as JSON (uuid, mint,
+token account, quantity, floor, delegate, approve signature), signed by the same wallet.
 
-- **Delegation.** The user signs an SPL Token-2022 `approveChecked` delegating up to the chosen
-  quantity of one token account to the keeper's public key. Anyone can read the delegate and the
-  delegated amount from the token account. Revoking is an SPL `revoke`, also signed by the user.
-- **Order record.** The user signs a second transaction carrying a Memo with the order as JSON
-  (mint, token account, quantity, floor, delegate, approve signature). The memo transaction's
-  signature is the order id. It is timestamped by the chain and signed by the owner.
-- **Execution.** One atomic transaction: delegated `transferChecked` from the user's account to the
-  keeper's account, Jupiter swap to USDC with `destinationTokenAccount` set to the user's USDC
-  account. If any step fails the whole transaction reverts. The keeper never ends a transaction
-  holding the asset or the proceeds.
+**What that grants.** The ability to transfer up to that amount, from that one account, until
+revoked or exhausted. Nothing else: not other mints, not other accounts, not amounts beyond the cap.
 
-What is off-chain:
+**What it does not grant, stated plainly.** SPL delegation does not enforce the price condition.
+The token program has no concept of a floor. The condition is enforced by the keeper's logic, so a
+compromised keeper key could sell a delegated position at a price the user did not authorise, capped
+at the delegated amount, on the delegated account only. **This system is not trust-minimised.** The
+honest claim is that the blast radius is capped by the delegation and the user can revoke at any
+time, with one `revoke` instruction, independent of Gapless being online. The revoke control sits on
+the same screen as the order.
 
-- The **index** of orders (`data/orders.json`), which the app writes through the GitHub Contents API
-  after verifying on an RPC that the approve and memo transactions exist, succeeded, were signed by
-  the connected wallet, and say what the app was told they say. The keeper writes the same file with
-  its check results and fills. Every write is a public commit.
-- The **enforcement**. A memo has no program logic; the keeper decides when to execute. The keeper
-  re-reads the delegation from the chain before every execution, so if a user revokes on-chain
-  through any wallet the order is closed even if the app never heard about it.
+**On-chain, verifiable:** the approve, the revoke, the memo (its signature is stored with the order;
+the order id is a uuid embedded in the memo), and execution as one atomic transaction: delegated
+`transferChecked` from the user's account to the keeper's account, Jupiter swap with
+`destinationTokenAccount` set to the user's USDC account. If any step fails the whole transaction
+reverts, so proceeds land in the owner's wallet and nowhere else, and the keeper never ends a
+transaction holding the asset.
 
-A production version would move the order record into a program-owned account so that the floor,
-quantity and regime rules are enforced by the chain rather than by a cron job. This build does not do
-that, and nothing in the interface claims otherwise.
+**Off-chain:** the order index and its state, written by the app through the GitHub Contents API
+after it reads the approve and memo transactions back from an RPC and checks the signer, the
+delegate, the amount and the memo fields. The keeper writes the same file. Every write is a public
+commit under the repository owner's name. The app holds a fine-grained GitHub token scoped to this
+repository's contents for those writes; it holds no signing key and never signs anything.
+
+### Order state machine
+
+```
+armed --breach threshold met--> triggered --> executing --> filled
+  |                                              |
+  |                                              +--> failed --> armed (next run retries)
+  +--user revoke--> revoked
+```
+
+`triggered` and `executing` are committed before the next step, so a keeper run that dies
+mid-execution is recoverable: the next run finds `executing`, looks the pending signature up on
+chain, and records the fill if it landed, or marks it failed if it cannot land any more. It never
+decides from memory. All token amounts in the order record are raw integer strings; no floating
+point arithmetic touches an amount anywhere in the system.
 
 ## The keeper
 
-`keeper/keeper.py` runs every five minutes on GitHub Actions, the same pattern as the recorder. Each
-run loads open orders, fetches prices from Jupiter Price API v3 (the same source as the recorder),
-computes the session with the recorder's function, applies the regime rules, and logs one line per
-order with the decision and the reason, whether it fired or not. The last decision is also written
-into the order so the app shows it on the row.
+`keeper/keeper.py` runs on GitHub Actions in the same pattern as the recorder: one job checks orders
+every five minutes for about five hours forty minutes, then dispatches the next job of itself, with
+a twice-hourly cron only as a backstop (see "Why continuous runs" below). Each check, in order:
+
+1. Load `data/orders.json`. If nothing is armed, triggered, executing or failed, log and exit.
+2. Compute session state with the recorder's function.
+3. One batched price read for every distinct mint. If it fails, no breach count changes and nothing
+   fires: a failed read is a gap in observation, not evidence either way.
+4. For each order: recover anything left `executing` from the chain; reset `failed` to `armed`;
+   compare price to floor; `breach_count` increments only on a successful read at or below the
+   floor and resets to zero on any read above it; mark `triggered` when the regime threshold is met.
+5. Commit the evaluation.
+6. For each `triggered` order, re-read the delegation from the chain, size the execution (in
+   `weekend`, halve until Jupiter's price impact is within tolerance and leave the rest armed),
+   build and simulate, commit `executing` with the pending signature, send, confirm.
+7. Record the fill from the transaction's real USDC balance change, or mark `failed` with the
+   reason. Commit.
+8. Log every order examined and why it did or did not fire. The log is a deliverable.
+
+The run exits zero on any data or network failure. A broken schedule is worse than a missed check.
 
 **The hot key.** The keeper signs execution transactions with a keypair stored as the GitHub Actions
 secret `KEEPER_SECRET_KEY`. This is a hackathon-grade arrangement. What the key can do: act as SPL
@@ -164,7 +197,36 @@ Free tiers only. No paid services.
    Optional: `NEXT_PUBLIC_RPC_URL` and `RPC_URL` to use an RPC other than the public mainnet-beta
    endpoint, which is rate-limited.
 3. **Workflows.** The `record` and `keeper` workflows need Actions enabled and workflow permissions
-   set to read and write. Trigger each once by hand from the Actions tab; the cron takes over.
+   set to read and write. Trigger each once by hand from the Actions tab to start its chain.
+
+## Why continuous runs instead of cron
+
+The recorder and keeper were first written as plain five-minute crons. GitHub fired the recorder's
+cron three times in seven hours on this repository. So each workflow run now does its job on a
+five-minute loop for the whole job limit, committing every reading as it is taken, and hands off to
+a fresh run of itself before it ends. Cron at :07/:37 (recorder) and :09/:39 (keeper) only restarts
+a chain if a hand-off ever fails, and a run checks for an already-queued successor so chains never
+multiply. The hand-off itself costs about a minute of readings every five and a half hours; that
+hole is real and stays visible in the data.
+
+## Verified before building
+
+- Mint addresses: checked on Solscan and against on-chain token metadata; they match the recorder.
+- Jupiter price endpoint and response: reused from the recorder (`recorder.PRICE_URL`).
+- Jupiter routing at sub-dollar size: `GET /swap/v2/build` returned routes for roughly one dollar in
+  both directions on all three mints (USDC to and from NVDAx, TSLAx, SPYx) with price impact below
+  0.05%. A funded round trip is the owner's to run with the keeper key.
+
+## Deliberately out of scope for v1
+
+- On-chain order records and program-enforced price conditions.
+- Take-profit or trailing floors. One primitive, executed well.
+- Multiple orders per token account. One delegation, one order: a newer approve on the same account
+  supersedes the older order.
+- Partial-fill UX beyond recording it. The weekend split is a safety mechanism, not a feature.
+- US market holidays. The recorder does not model them.
+- Notifications.
+- Any token that is not an xStock.
 
 ## Limitations
 
@@ -179,9 +241,9 @@ Free tiers only. No paid services.
   aggressively. If the holdings row reports an RPC error, reload, or set `NEXT_PUBLIC_RPC_URL`.
 - **USDC account.** Execution creates the user's USDC associated token account if it does not exist,
   paid by the keeper.
-- **Push races.** The recorder pushes with git; the keeper and the app write `data/orders.json`
-  through the Contents API with optimistic concurrency and one retry. `data/prices.csv` uses git's
-  `union` merge driver so two appended readings are both kept.
+- **Push races.** The recorder pushes with git and rebases once if the branch moved; the keeper and
+  the app write `data/orders.json` through the Contents API with optimistic concurrency and one
+  retry. The two never write the same file.
 
 ## The recorder
 

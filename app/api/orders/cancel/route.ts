@@ -11,16 +11,17 @@ export async function POST(req: Request) {
     let tokenAccount = "";
     let err: string | null = null;
     await updateOrders((s) => {
-      const o = s.orders.find((x) => x.id === id && x.owner === owner);
+      const o = s.orders.find((x) => x.id === id && x.owner_pubkey === owner);
       if (!o) { err = "order not found"; return "noop"; }
-      tokenAccount = o.tokenAccount;
-      o.status = "cancelled"; o.revokeSig = revokeSig;
-      o.lastCheck = { at: new Date().toISOString().replace(/\.\d+Z$/, "Z"), session: "-", price: null, decision: "revoked by owner" };
-      return `cancel ${o.ticker} ${revokeSig.slice(0, 8)}`;
+      if (o.status === "executing") { err = "order is executing; wait for the keeper to settle it"; return "noop"; }
+      tokenAccount = o.token_account;
+      o.status = "revoked"; o.revoke_sig = revokeSig;
+      o.last_decision = "revoked by owner"; o.last_checked_at = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+      return `revoke ${o.ticker} ${revokeSig.slice(0, 8)}`;
     }).catch((e) => { err = (e as Error).message; });
     if (err) return NextResponse.json({ error: err }, { status: 422 });
     const bad = await verifyRevoke(revokeSig, owner, tokenAccount);
-    // The cancel is recorded even if the RPC lags; the keeper re-checks delegation on chain before ever executing.
+    // Recorded even if the RPC lags; the keeper re-reads delegation from the chain before ever executing.
     return NextResponse.json({ ok: true, verified: bad === null, note: bad });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
