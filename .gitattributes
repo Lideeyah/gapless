@@ -1,0 +1,2 @@
+# Append-only log: if two commits both append rows, keep both sides instead of conflicting.
+data/prices.csv merge=union
