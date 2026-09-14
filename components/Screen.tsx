@@ -45,6 +45,8 @@ export default function Screen() {
   const [qtyText, setQtyText] = useState("");
   const [phase, setPhase] = useState<Phase | null>(null);
   const [wantConnect, setWantConnect] = useState(false);
+  const [mounted, setMounted] = useState(false); // wallet detection only exists in the browser; keep SSR and first paint identical
+  useEffect(() => { setMounted(true); }, []);
 
   const loadHistory = useCallback(async () => {
     try { const r = await fetch("/api/history", { cache: "no-store" }); const j = await r.json(); if (j.error) throw new Error(j.error); setHistory(j); setHistErr(null); }
@@ -83,7 +85,12 @@ export default function Screen() {
   useEffect(() => { if (wantConnect && wallet && !connected && !connecting) { connect().catch(() => {}).finally(() => setWantConnect(false)); } }, [wantConnect, wallet, connected, connecting, connect]);
 
   const phantom = wallets.find((w) => w.adapter.name === "Phantom");
-  const onConnect = () => { if (!phantom) { window.open("https://phantom.app", "_blank"); return; } select(phantom.adapter.name); setWantConnect(true); };
+  const onConnect = () => {
+    const found = phantom ?? wallets.find((w) => w.adapter.name === "Phantom");
+    if (!found) { window.open("https://phantom.app", "_blank"); return; }
+    select(found.adapter.name); setWantConnect(true);
+  };
+  const connectLabel = !mounted ? "connect wallet" : connecting ? "connecting" : phantom ? "connect Phantom" : "install Phantom";
 
   const holding = holdings?.find((h) => h.ticker === sel) ?? null;
   const live = orders.filter((o) => LIVE.includes(o.status));
@@ -162,7 +169,7 @@ export default function Screen() {
           {connected && owner ? (
             <div><span className="mono">{short(owner)}</span><span className="faint"> · </span><button className="btn btn-secondary" onClick={() => disconnect()}>disconnect</button></div>
           ) : (
-            <button className="btn btn-primary" onClick={onConnect} disabled={connecting}>{connecting ? "connecting" : phantom ? "connect Phantom" : "install Phantom"}</button>
+            <button className="btn btn-primary" onClick={onConnect} disabled={!mounted || connecting}>{connectLabel}</button>
           )}
         </div>
       </header>
