@@ -82,10 +82,10 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minRead
           )}
           <path d={model.d} fill="none" stroke="#F4F1EA" strokeWidth={3.5} strokeLinejoin="round" strokeLinecap="round" pathLength={1} className="draw" />
           <path d={model.d} fill="none" stroke="#1F4D3D" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" pathLength={1} className="draw" />
-          <text x={padL} y={h - 8} fill="#14161A" opacity={0.6} fontSize={13} fontFamily="var(--font-mono), monospace">{fmtUsd(model.lo)}</text>
-          <text x={padL} y={top - 8} fill="#14161A" opacity={0.6} fontSize={13} fontFamily="var(--font-mono), monospace">{fmtUsd(model.hi)}</text>
+          <text x={padL} y={h - 8} fill="#14161A" opacity={0.6} fontSize={13} fontFamily="var(--font-mono), monospace" paintOrder="stroke" stroke="#F4F1EA" strokeWidth={3}>{fmtUsd(model.lo)}</text>
+          <text x={padL} y={top - 8} fill="#14161A" opacity={0.6} fontSize={13} fontFamily="var(--font-mono), monospace" paintOrder="stroke" stroke="#F4F1EA" strokeWidth={3}>{fmtUsd(model.hi)}</text>
           {floor !== null && Number.isFinite(floor) && (
-            <text x={w - padR} y={model.y(floor) - 6} textAnchor="end" fill="#1F4D3D" fontSize={13} fontFamily="var(--font-mono), monospace">floor {fmtUsd(floor)}</text>
+            <text x={w - padR} y={model.y(floor) - 6} textAnchor="end" fill="#1F4D3D" fontSize={13} fontFamily="var(--font-mono), monospace" paintOrder="stroke" stroke="#F4F1EA" strokeWidth={3}>floor {fmtUsd(floor)}</text>
           )}
         </svg>
       )}
