@@ -572,3 +572,6 @@ timestamp_utc,ticker,mint,price_usd,session,source
 2026-09-14T14:45:00Z,NVDAx,Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh,210.50307349983694,open,jupiter-price-v3
 2026-09-14T14:45:00Z,TSLAx,XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB,358.6636579329822,open,jupiter-price-v3
 2026-09-14T14:45:00Z,SPYx,XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W,758.443536480666,open,jupiter-price-v3
+2026-09-14T14:50:00Z,NVDAx,Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh,210.82967143946294,open,jupiter-price-v3
+2026-09-14T14:50:00Z,TSLAx,XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB,359.31906001575715,open,jupiter-price-v3
+2026-09-14T14:50:00Z,SPYx,XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W,758.659037680815,open,jupiter-price-v3
