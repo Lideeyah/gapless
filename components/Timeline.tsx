@@ -51,13 +51,17 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minRead
     // price path, broken at holes (missing price or gap > 3 readings); each hole gets a label
     let d = ""; let prev: { ms: number } | null = null;
     const holes: { x0: number; x1: number; label: string }[] = [];
+    const holeW = (t: string) => t.length * 7.3 + 24;
     for (const r of series) {
       const ms = Date.parse(r.t);
       if (r.price === null) { prev = null; continue; }
       const isHole = Boolean(prev && ms - prev.ms > GAP);
       if (isHole) {
         const mins = Math.round((ms - prev!.ms) / 60000);
-        holes.push({ x0: x(prev!.ms), x1: x(ms), label: `no readings · ${mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`}` });
+        const label = `no readings · ${mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`}`;
+        const x0 = x(prev!.ms), x1 = x(ms), last = holes.at(-1);
+        // label only holes wide enough to hold their label, and never on top of the previous label
+        if (x1 - x0 >= holeW(label) && (!last || (x0 + x1) / 2 - (last.x0 + last.x1) / 2 > holeW(last.label))) holes.push({ x0, x1, label });
       }
       d += `${isHole || !prev ? "M" : "L"}${x(ms).toFixed(1)} ${y(r.price).toFixed(1)} `;
       prev = { ms };
@@ -90,7 +94,7 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minRead
               <rect key={i} x={b.x0} y={top} width={Math.max(0.5, b.x1 - b.x0)} height={h - bottom - top} fill="#14161A" opacity={b.s === "weekend" ? 1 : 0.3} />
             ))}
           </g>
-          {model.holes.filter((g) => g.x1 - g.x0 > 90).map((g, i) => (
+          {model.holes.map((g, i) => (
             <text key={`hole-${i}`} x={(g.x0 + g.x1) / 2} y={(top + h - bottom) / 2 + 4} textAnchor="middle" fill="#14161A" opacity={0.6} fontSize={12} fontFamily="var(--font-mono), monospace" paintOrder="stroke" stroke="#F4F1EA" strokeWidth={3}>{g.label}</text>
           ))}
           {model.marks.map((m, i) => (
