@@ -14,7 +14,7 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minRead
     ro.observe(ref.current);
     return () => ro.disconnect();
   }, []);
-  const h = 264, padL = 8, padR = 8, top = 24, bottom = 48;
+  const h = 288, padL = 8, padR = 8, top = 24, bottom = 56;
   const series = useMemo(() => rows.filter((r) => r.ticker === ticker), [rows, ticker]);
   const model = useMemo(() => {
     const t0 = firstAt ? Date.parse(firstAt) : 0, t1 = lastAt ? Date.parse(lastAt) : 1;
@@ -29,14 +29,22 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minRead
     const y = (p: number) => top + (1 - (p - lo) / (hi - lo)) * (h - top - bottom);
     // session bands from distinct timestamps, in order
     const stamps = [...new Map(rows.map((r) => [Date.parse(r.t), r.session])).entries()].sort((a, b) => a[0] - b[0]);
-    const bands: { x0: number; x1: number; s: string }[] = [];
+    const bands: { x0: number; x1: number; s: string; ms: number }[] = [];
     for (let i = 0; i < stamps.length; i++) {
       const [ms, s] = stamps[i];
       const next = i + 1 < stamps.length ? stamps[i + 1][0] : ms + CADENCE;
       const x0 = x(ms), x1 = x(Math.min(next, t1 + CADENCE));
       const last = bands.at(-1);
-      if (last && last.s === s && last.x1 >= x0 - 0.5) last.x1 = x1; else bands.push({ x0, x1, s });
+      if (last && last.s === s && last.x1 >= x0 - 0.5) last.x1 = x1; else bands.push({ x0, x1, s, ms });
     }
+    // one label per session change, thinned so they never collide
+    const marks: { x: number; label: string }[] = [];
+    for (const b of bands) {
+      const d = new Date(b.ms);
+      const label = `${b.s} · ${d.toISOString().slice(5, 16).replace("T", " ")}`;
+      if (!marks.length || b.x0 - marks.at(-1)!.x > 120) marks.push({ x: b.x0, label });
+    }
+    const lastPriced = [...series].reverse().find((r) => r.price !== null) ?? null;
     // price path, broken at holes (missing price or gap > 3 readings)
     let d = ""; let prev: { ms: number } | null = null;
     for (const r of series) {
@@ -46,7 +54,7 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minRead
       d += `${cmd}${x(ms).toFixed(1)} ${y(r.price).toFixed(1)} `;
       prev = { ms };
     }
-    return { x, y, lo, hi, bands, d, readings: series.length, priced: priced.length };
+    return { x, y, lo, hi, bands, marks, d, readings: series.length, priced: priced.length, end: lastPriced ? { x: x(Date.parse(lastPriced.t)), y: y(lastPriced.price!), p: lastPriced.price! } : null };
   }, [rows, series, w, floor, firstAt, lastAt]);
 
   const tooShort = model.priced < minReadings;
@@ -67,29 +75,40 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minRead
       ) : (
         <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: "block", overflow: "visible" }}>
           <defs>
-            <filter id="bleed" x="-2%" y="-10%" width="104%" height="120%"><feGaussianBlur stdDeviation="4 0" /></filter>
+            <filter id="bleed" x="-5%" y="-10%" width="110%" height="120%"><feGaussianBlur stdDeviation="7 0" /></filter>
+            <linearGradient id="press" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="#fff" stopOpacity="0.92" /><stop offset="0.75" stopColor="#fff" stopOpacity="1" /><stop offset="1" stopColor="#fff" stopOpacity="0.55" />
+            </linearGradient>
+            <mask id="pressMask"><rect x="0" y="0" width={w} height={h} fill="url(#press)" /></mask>
           </defs>
-          <g filter="url(#bleed)">
+          <g filter="url(#bleed)" mask="url(#pressMask)">
             {model.bands.map((b, i) => b.s === "open" ? null : (
-              <rect key={i} x={b.x0} y={0} width={Math.max(0.5, b.x1 - b.x0)} height={h - bottom + 12} fill="#14161A" opacity={b.s === "weekend" ? 1 : 0.3} />
+              <rect key={i} x={b.x0} y={top} width={Math.max(0.5, b.x1 - b.x0)} height={h - bottom - top + 8} fill="#14161A" opacity={b.s === "weekend" ? 1 : 0.3} />
             ))}
           </g>
+          {model.marks.map((m, i) => (
+            <g key={i}>
+              <line x1={m.x} x2={m.x} y1={h - bottom + 8} y2={h - bottom + 16} stroke="#14161A" strokeOpacity={0.3} strokeWidth={1} />
+              <text x={m.x + 4} y={h - bottom + 28} fill="#14161A" opacity={0.6} fontSize={12} fontFamily="var(--font-mono), monospace">{m.label}</text>
+            </g>
+          ))}
           {floor !== null && Number.isFinite(floor) && (
             <g>
               <line x1={padL} x2={w - padR} y1={model.y(floor)} y2={model.y(floor)} stroke="#F4F1EA" strokeWidth={3} opacity={0.9} />
               <line x1={padL} x2={w - padR} y1={model.y(floor)} y2={model.y(floor)} stroke="#1F4D3D" strokeWidth={1} opacity={0.3} />
             </g>
           )}
-          <path d={model.d} fill="none" stroke="#F4F1EA" strokeWidth={3.5} strokeLinejoin="round" strokeLinecap="round" pathLength={1} className="draw" />
-          <path d={model.d} fill="none" stroke="#1F4D3D" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" pathLength={1} className="draw" />
-          <text x={padL} y={h - 8} fill="#14161A" opacity={0.6} fontSize={13} fontFamily="var(--font-mono), monospace" paintOrder="stroke" stroke="#F4F1EA" strokeWidth={3}>{fmtUsd(model.lo)}</text>
-          <text x={padL} y={top - 8} fill="#14161A" opacity={0.6} fontSize={13} fontFamily="var(--font-mono), monospace" paintOrder="stroke" stroke="#F4F1EA" strokeWidth={3}>{fmtUsd(model.hi)}</text>
+          <path d={model.d} fill="none" stroke="#F4F1EA" strokeWidth={2.75} strokeOpacity={0.9} strokeLinejoin="round" strokeLinecap="round" pathLength={1} className="draw" />
+          <path d={model.d} fill="none" stroke="#1F4D3D" strokeWidth={1.25} strokeLinejoin="round" strokeLinecap="round" pathLength={1} className="draw" />
+          {model.end && (<g><circle cx={model.end.x} cy={model.end.y} r={2.5} fill="#1F4D3D" stroke="#F4F1EA" strokeWidth={1.5} /><text x={Math.min(model.end.x, w - padR) } y={model.end.y - 10} textAnchor="end" fill="#1F4D3D" fontSize={13} fontFamily="var(--font-mono), monospace" paintOrder="stroke" stroke="#F4F1EA" strokeWidth={3}>{fmtUsd(model.end.p)}</text></g>)}
+          <text x={w - padR} y={h - bottom + 28} textAnchor="end" fill="#14161A" opacity={0.6} fontSize={12} fontFamily="var(--font-mono), monospace">low {fmtUsd(model.lo)}</text>
+          <text x={w - padR} y={top - 8} textAnchor="end" fill="#14161A" opacity={0.6} fontSize={12} fontFamily="var(--font-mono), monospace">high {fmtUsd(model.hi)}</text>
           {floor !== null && Number.isFinite(floor) && (
             <text x={w - padR} y={model.y(floor) - 6} textAnchor="end" fill="#1F4D3D" fontSize={13} fontFamily="var(--font-mono), monospace" paintOrder="stroke" stroke="#F4F1EA" strokeWidth={3}>floor {fmtUsd(floor)}</text>
           )}
         </svg>
       )}
-      <div className="mono faint" style={{ lineHeight: "24px" }}>bare paper: open · ink 30%: overnight · ink: weekend · session labels are the recorder’s own</div>
+      <div className="mono faint" style={{ lineHeight: "24px" }}>paper: open · ink 30%: overnight · ink: weekend · holes are missing readings · session labels are the recorder’s own</div>
     </div>
   );
 }
