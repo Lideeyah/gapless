@@ -27,18 +27,20 @@ export default async function Landing() {
           <p className="sub">The stock market is open 32.5 hours a week. Your money is exposed for the other 135.</p>
           <div style={{ height: 24 }} />
           <p className="sub">Gapless watches your stock for you. Pick a price you won&rsquo;t let it fall below. If it gets there, at 3am or on a Sunday, Gapless sells it and the cash lands in your wallet.</p>
-          <div style={{ height: 48 }} />
-          <p className="mono secondary">
-            {s.closedShareOfMovement !== null
-              ? <>{fmtShare(s.closedShareOfMovement)} of all price movement recorded so far happened while the NYSE was shut · {window} · {s.tickers.length} tickers · <a href={HISTORY_URL}>data/prices.csv</a></>
-              : s.firstAt
-                ? <>recording since {fmtTs(s.firstAt)} · {s.readings} readings · {s.closureCount} closure{s.closureCount === 1 ? "" : "s"} touched, {s.fullClosureCount} complete · <a href={HISTORY_URL}>data/prices.csv</a></>
-                : <>no readings yet · <a href={HISTORY_URL}>data/prices.csv</a></>}
-          </p>
         </div>
         <div className="hero-side">
           <a href="/app" className="btn btn-primary" style={{ display: "inline-block", textDecoration: "none" }}>Open Gapless</a>
           <p className="mono secondary" style={{ paddingTop: 16 }}>connect a wallet · set a floor · revoke any time</p>
+          <div style={{ height: 120 }} />
+          <div style={{ display: "grid", gap: 24 }}>
+            {s.closedShareOfMovement !== null ? (
+              <div><div className="fig">{fmtShare(s.closedShareOfMovement)}</div><div className="mono secondary">of recorded price movement happened<br />while the NYSE was shut · {s.tickers.length} tickers</div></div>
+            ) : (
+              <div><div className="fig">{s.closureCount}</div><div className="mono secondary">closure{s.closureCount === 1 ? "" : "s"} touched, {s.fullClosureCount} complete</div></div>
+            )}
+            <div><div className="fig">{s.readings}</div><div className="mono secondary">readings, five minutes apart, since<br />{s.firstAt ? fmtTs(s.firstAt) : "—"}</div></div>
+            <p className="mono secondary"><a href={HISTORY_URL}>data/prices.csv</a> · every reading is a commit</p>
+          </div>
         </div>
       </section>
 
