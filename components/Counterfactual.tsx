@@ -30,7 +30,7 @@ export default function Counterfactual({ stats, gap }: { stats: Stats | null; ga
           <p className="secondary" style={{ paddingTop: 24 }}>
             Recording began {stats.firstAt ? fmtTs(stats.firstAt) : "—"}{stats.currentSession && stats.currentSession !== "open" ? `, inside a ${stats.currentSession} closure` : ""}.
             {stats.inClosureSince ? ` The current closure has ${stats.closureReadings} reading${stats.closureReadings === 1 ? "" : "s"} so far.` : ""}
-            {" "}A gap needs an open-hours reading on both sides of a closure. The first one the recorder can capture starts at the next Friday 16:00 ET close and completes at the following Monday 09:30 ET open.
+            {" "}A gap needs an open-hours reading on both sides of a closure. The first one the recorder can capture begins at the next 16:00 ET close and completes at the 09:30 ET open that follows it.
           </p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 16, paddingTop: 24 }}>
             {stats.tickers.map((tk) => {
