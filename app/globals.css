@@ -46,9 +46,9 @@ input::placeholder { color: var(--ink30); }
 .body { font-size: 18px; line-height: 30px; max-width: 34ch; }
 .fig { font-family: var(--font-display), Didot, serif; font-weight: 500; font-size: 44px; line-height: 48px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums lining-nums; }
 @media (max-width: 760px) { .hero { font-size: 40px; line-height: 48px; } .sub, .lede { font-size: 18px; line-height: 30px; } .fig { font-size: 32px; line-height: 48px; } }
-.hero-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 48px; align-items: center; min-height: calc(100vh - 96px); }
+.hero-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 48px; align-items: start; padding-top: 96px; min-height: calc(100vh - 96px); }
 .hero-grid:last-of-type { min-height: 0; }
-.hero-side { justify-self: end; text-align: right; }
+.hero-side { justify-self: end; text-align: right; padding-top: 12px; }
 .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 48px; align-items: start; }
 .pair .lede, .pair .body, .hero .sub { max-width: none; }
 .hero { max-width: none; }

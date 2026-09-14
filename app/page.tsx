@@ -22,7 +22,7 @@ export default async function Landing() {
     <main className="page">
       <section className="hero-grid">
         <div>
-          <h1 className="hero">Wall Street is closed.<br /><span className="green">Your stop loss isn&rsquo;t.</span></h1>
+          <h1 className="hero">Wall Street is closed.<br />Your <span className="green">stop loss</span> isn&rsquo;t.</h1>
           <div style={{ height: 48 }} />
           <p className="sub">The stock market is open 32.5 hours a week. Your money is exposed for the other 135.</p>
           <div style={{ height: 48 }} />
@@ -126,7 +126,7 @@ export default async function Landing() {
       <div style={{ height: 72 }} />
 
       <section className="hero-grid">
-        <p className="hero" style={{ fontSize: 44, lineHeight: "48px" }}>The market never closes.<br /><span className="green">Neither does your floor.</span></p>
+        <p className="hero" style={{ fontSize: 44, lineHeight: "48px" }}>The market never closes.<br />Neither does your <span className="green">floor</span>.</p>
         <div className="hero-side"><a href="/app" className="btn btn-primary" style={{ display: "inline-block", textDecoration: "none" }}>Open Gapless</a></div>
       </section>
 

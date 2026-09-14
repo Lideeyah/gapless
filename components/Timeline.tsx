@@ -38,11 +38,14 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minRead
       if (last && last.s === s && last.x1 >= x0 - 0.5) last.x1 = x1; else bands.push({ x0, x1, s, ms });
     }
     // one label per session change, thinned so they never collide
-    const marks: { x: number; label: string }[] = [];
+    const marks: { x: number; label: string; anchorEnd: boolean }[] = [];
+    const labelW = (t: string) => t.length * 7.3 + 16;
     for (const b of bands) {
       const d = new Date(b.ms);
       const label = `${b.s} · ${d.toISOString().slice(5, 16).replace("T", " ")}`;
-      if (!marks.length || b.x0 - marks.at(-1)!.x > 120) marks.push({ x: b.x0, label });
+      const prev = marks.at(-1);
+      if (prev && b.x0 - prev.x < labelW(prev.label)) continue; // would collide with the previous label
+      marks.push({ x: b.x0, label, anchorEnd: b.x0 + labelW(label) > w });
     }
     const lastPriced = [...series].reverse().find((r) => r.price !== null) ?? null;
     // price path, broken at holes (missing price or gap > 3 readings)
@@ -89,7 +92,7 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minRead
           {model.marks.map((m, i) => (
             <g key={i}>
               <line x1={m.x} x2={m.x} y1={h - bottom + 8} y2={h - bottom + 16} stroke="#14161A" strokeOpacity={0.3} strokeWidth={1} />
-              <text x={m.x + 4} y={h - bottom + 28} fill="#14161A" opacity={0.6} fontSize={12} fontFamily="var(--font-mono), monospace">{m.label}</text>
+              <text x={m.anchorEnd ? m.x - 4 : m.x + 4} y={h - bottom + 28} textAnchor={m.anchorEnd ? "end" : "start"} fill="#14161A" opacity={0.6} fontSize={12} fontFamily="var(--font-mono), monospace">{m.label}</text>
             </g>
           ))}
           {floor !== null && Number.isFinite(floor) && (
@@ -101,8 +104,8 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minRead
           <path d={model.d} fill="none" stroke="#F4F1EA" strokeWidth={2.75} strokeOpacity={0.9} strokeLinejoin="round" strokeLinecap="round" pathLength={1} className="draw" />
           <path d={model.d} fill="none" stroke="#1F4D3D" strokeWidth={1.25} strokeLinejoin="round" strokeLinecap="round" pathLength={1} className="draw" />
           {model.end && (<g><circle cx={model.end.x} cy={model.end.y} r={2.5} fill="#1F4D3D" stroke="#F4F1EA" strokeWidth={1.5} /><text x={Math.min(model.end.x, w - padR) } y={model.end.y - 10} textAnchor="end" fill="#1F4D3D" fontSize={13} fontFamily="var(--font-mono), monospace" paintOrder="stroke" stroke="#F4F1EA" strokeWidth={3}>{fmtUsd(model.end.p)}</text></g>)}
-          <text x={w - padR} y={h - bottom + 28} textAnchor="end" fill="#14161A" opacity={0.6} fontSize={12} fontFamily="var(--font-mono), monospace">low {fmtUsd(model.lo)}</text>
-          <text x={w - padR} y={top - 8} textAnchor="end" fill="#14161A" opacity={0.6} fontSize={12} fontFamily="var(--font-mono), monospace">high {fmtUsd(model.hi)}</text>
+          
+          <text x={w - padR} y={top - 8} textAnchor="end" fill="#14161A" opacity={0.6} fontSize={12} fontFamily="var(--font-mono), monospace">high {fmtUsd(model.hi)} · low {fmtUsd(model.lo)}</text>
           {floor !== null && Number.isFinite(floor) && (
             <text x={w - padR} y={model.y(floor) - 6} textAnchor="end" fill="#1F4D3D" fontSize={13} fontFamily="var(--font-mono), monospace" paintOrder="stroke" stroke="#F4F1EA" strokeWidth={3}>floor {fmtUsd(floor)}</text>
           )}
