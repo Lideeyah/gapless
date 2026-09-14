@@ -109,3 +109,28 @@ export function stats(rows: Reading[]): Stats {
     closureCount: cls.length, fullClosureCount: cls.filter((c) => c.full).length, currentSession: last?.session ?? null,
     inClosureSince: open ? new Date(open.startMs).toISOString().replace(/\.\d+Z$/, "Z") : null, closureReadings: open?.readings ?? 0, perTicker };
 }
+
+/** For a downward gap: a floor halfway between the pre-close price and the extreme, and the first reading during closure at or below it. */
+export function floorExample(rows: Reading[], gap: Gap): { floor: number; at: string; price: number } | null {
+  if (gap.extremePrice >= gap.closePrice) return null;
+  const floor = Math.round(((gap.closePrice + gap.extremePrice) / 2) * 100) / 100;
+  const c0 = Date.parse(gap.closeAt), c1 = Date.parse(gap.reopenAt);
+  const hit = rows.find((r) => r.ticker === gap.ticker && r.price !== null && r.ms > c0 && r.ms < c1 && r.session !== "open" && r.price <= floor);
+  return hit ? { floor, at: hit.t, price: hit.price! } : null;
+}
+
+/** Complete closures, and how many of them saw any ticker trade below its pre-close price during the closure. */
+export function closureMoves(rows: Reading[]): { complete: number; belowClose: number } {
+  const full = closures(rows).filter((c) => c.full);
+  let belowClose = 0;
+  for (const c of full) {
+    let any = false;
+    for (const ticker of new Set(rows.map((r) => r.ticker))) {
+      const tr = rows.filter((r) => r.ticker === ticker && r.price !== null);
+      const before = [...tr].reverse().find((r) => r.session === "open" && r.ms < c.startMs);
+      if (before && tr.some((r) => r.ms >= c.startMs && r.ms <= c.endMs && r.price! < before.price!)) { any = true; break; }
+    }
+    if (any) belowClose++;
+  }
+  return { complete: full.length, belowClose };
+}

@@ -39,3 +39,10 @@ input::placeholder { color: var(--ink30); }
 .draw { stroke-dasharray: 1; stroke-dashoffset: 1; animation: draw 1.6s ease-out forwards; }
 @keyframes draw { to { stroke-dashoffset: 0; } }
 @media (max-width: 760px) { .row { grid-template-columns: 1fr 1fr; } .page { padding-left: 20px; padding-right: 20px; } }
+/* landing */
+.hero { font-family: var(--font-display), Didot, serif; font-weight: 500; font-size: 64px; line-height: 72px; letter-spacing: -0.03em; margin: 0; max-width: 14ch; }
+.sub { font-size: 22px; line-height: 36px; max-width: 32ch; }
+.lede { font-size: 22px; line-height: 36px; max-width: 34ch; }
+.body { font-size: 18px; line-height: 30px; max-width: 34ch; }
+.fig { font-family: var(--font-display), Didot, serif; font-weight: 500; font-size: 44px; line-height: 48px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums lining-nums; }
+@media (max-width: 760px) { .hero { font-size: 40px; line-height: 48px; } .sub, .lede { font-size: 18px; line-height: 30px; } .fig { font-size: 32px; line-height: 48px; } }

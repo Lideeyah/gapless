@@ -5,7 +5,7 @@ import { fmtTs, fmtUsd } from "@/lib/format";
 export type Row = { t: string; ticker: string; price: number | null; session: "open" | "overnight" | "weekend" };
 const CADENCE = 5 * 60 * 1000, GAP = 3 * CADENCE, MIN_READINGS = 20;
 
-export default function Timeline({ rows, ticker, floor, firstAt, lastAt }: { rows: Row[]; ticker: string; floor: number | null; firstAt: string | null; lastAt: string | null }) {
+export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minReadings = MIN_READINGS }: { rows: Row[]; ticker: string; floor: number | null; firstAt: string | null; lastAt: string | null; minReadings?: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(1120);
   useEffect(() => {
@@ -49,7 +49,7 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt }: { row
     return { x, y, lo, hi, bands, d, readings: series.length, priced: priced.length };
   }, [rows, series, w, floor, firstAt, lastAt]);
 
-  const tooShort = model.priced < MIN_READINGS;
+  const tooShort = model.priced < minReadings;
   return (
     <div ref={ref} style={{ width: "100%" }}>
       <div className="mono secondary" style={{ display: "flex", justifyContent: "space-between", lineHeight: "24px" }}>
@@ -61,7 +61,7 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt }: { row
         <div style={{ height: h, display: "flex", alignItems: "center" }}>
           <p className="secondary" style={{ maxWidth: 560 }}>
             The window is too short to draw honestly. {model.priced} priced reading{model.priced === 1 ? "" : "s"} of {ticker} exist so far
-            {firstAt ? ` since ${fmtTs(firstAt)}` : ""}; the line appears at {MIN_READINGS}. The recorder adds one every five minutes, best-effort.
+            {firstAt ? ` since ${fmtTs(firstAt)}` : ""}; the line appears at {minReadings}. The recorder adds one every five minutes, best-effort.
           </p>
         </div>
       ) : (
