@@ -25,6 +25,8 @@ export default async function Landing() {
           <h1 className="hero">Wall Street is closed.<br />Your <span className="green">stop loss</span> isn&rsquo;t.</h1>
           <div style={{ height: 48 }} />
           <p className="sub">The stock market is open 32.5 hours a week. Your money is exposed for the other 135.</p>
+          <div style={{ height: 24 }} />
+          <p className="sub">Gapless watches your stock for you. Pick a price you won&rsquo;t let it fall below. If it gets there, at 3am or on a Sunday, Gapless sells it and the cash lands in your wallet.</p>
           <div style={{ height: 48 }} />
           <p className="mono secondary">
             {s.closedShareOfMovement !== null
