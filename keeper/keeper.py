@@ -225,27 +225,57 @@ def mint_state(mint):
     return st
 
 
+SPLIT_MIN_LOG_RATIO = Decimal("0.01")  # a multiplier change under ~1% is dividend accrual by construction; no split is that small
+
+
+def classify_multiplier_event(o, price):
+    """Second reading after a multiplier change. Decide split vs accrual from the displayed price, then settle the floor.
+
+    Displayed price = raw price / multiplier. At a split the displayed price moves by old/new; at a dividend accrual
+    the raw price rises by the same factor the multiplier did and the displayed price does not move at all.
+    """
+    ev = o["multiplier_event"]
+    ratio = Decimal(ev["old_multiplier"]) / Decimal(ev["new_multiplier"])
+    pre = Decimal(ev["pre_price_usd"]) if ev.get("pre_price_usd") else None
+    old_floor = Decimal(o["floor_price_usd"])
+    kind = "accrual"
+    if abs(ratio.ln()) >= SPLIT_MIN_LOG_RATIO:
+        if pre is None:
+            kind = "split"  # no pre-change price to compare against: assume the dangerous case, which keeps the floor meaningful
+        else:
+            d_split = abs((price / (pre * ratio)).ln())
+            d_flat = abs((price / pre).ln())
+            kind = "split" if d_split < d_flat else "accrual"
+    entry = {"at": now_iso(), "kind": kind, "old_multiplier": ev["old_multiplier"], "new_multiplier": ev["new_multiplier"],
+             "pre_price_usd": ev.get("pre_price_usd"), "post_price_usd": str(price), "old_floor": str(old_floor), "new_floor": str(old_floor)}
+    if kind == "split":
+        new_floor = (old_floor * ratio).quantize(Decimal("0.000001"))
+        o["floor_price_usd"], entry["new_floor"] = str(new_floor), str(new_floor)
+    o.setdefault("rebases", []).append(entry)
+    o["multiplier_event"] = None
+    return entry
+
+
 def guard_mint(o, tag):
     """Pre-trade mint guard. Returns None if trading may be evaluated, else the decision string.
-    Order of checks: state readable -> multiplier unchanged (else rebase and skip) -> not paused -> no transfer hook."""
+    Order of checks: state readable -> multiplier unchanged (else note the change and skip) -> not paused -> no transfer hook."""
     try:
         st = mint_state(o["mint"])
     except Exception as exc:  # noqa: BLE001
         o["blocked"] = "mint_unreadable"
         return f"mint state unreadable ({exc}); nothing evaluated, nothing fired"
     stored = o.get("multiplier")
-    if stored is None:  # orders armed before the guard existed: adopt the current multiplier without rebasing
+    if stored is None:  # orders armed before the guard existed: adopt the current multiplier
         o["multiplier"] = st["multiplier"]
     elif Decimal(stored) != Decimal(st["multiplier"]):
-        old_floor = Decimal(o["floor_price_usd"])
-        new_floor = (old_floor * Decimal(stored) / Decimal(st["multiplier"])).quantize(Decimal("0.000001"))
-        o.setdefault("rebases", []).append({"at": now_iso(), "old_floor": str(old_floor), "new_floor": str(new_floor),
-                                            "old_multiplier": stored, "new_multiplier": st["multiplier"]})
-        o["floor_price_usd"], o["multiplier"], o["breach_count"] = str(new_floor), st["multiplier"], 0
+        # Cycle one of two: record the change, reset the breach count, evaluate nothing. The next reading decides
+        # whether this was a split (rebase the floor) or a dividend accrual (leave the floor exactly where it was set).
+        o["multiplier_event"] = {"detected_at": now_iso(), "old_multiplier": stored, "new_multiplier": st["multiplier"], "pre_price_usd": o.get("last_price_usd")}
+        o["multiplier"], o["breach_count"] = st["multiplier"], 0
         if o["status"] == "triggered":
-            o["status"] = "armed"  # a trigger counted against the old floor means nothing against the new one
+            o["status"] = "armed"  # a trigger counted before the change means nothing after it
         o["blocked"] = None
-        return f"rebased: multiplier {stored} -> {st['multiplier']}, floor {old_floor} -> {new_floor}; breach count reset; not evaluated this cycle"
+        return f"multiplier changed {stored} -> {st['multiplier']}; breach count reset; classifying on the next reading, nothing evaluated this cycle"
     if st["paused"]:
         o["blocked"] = "paused"
         return "mint is paused by the issuer; no route requested, nothing sold"
@@ -425,6 +455,11 @@ def run():
                 log(f"{tag} {o['last_decision']}")
                 continue
             price, _ = prices[o["mint"]]
+            if o.get("multiplier_event"):
+                ev = classify_multiplier_event(o, price)
+                log(f"{tag} multiplier change classified as {ev['kind']}: price {ev['pre_price_usd']} -> {ev['post_price_usd']} against ratio "
+                    f"{Decimal(ev['old_multiplier']) / Decimal(ev['new_multiplier']):.6f}; floor {ev['old_floor']} -> {ev['new_floor']}")
+                tag = f"[{o['id'][:8]} {o['ticker']} floor={o['floor_price_usd']}]"
             o["last_price_usd"] = str(price)
             if price > Decimal(o["floor_price_usd"]):
                 o["breach_count"], o["status"] = 0, "armed"

@@ -121,16 +121,25 @@ DefaultAccountState (initialized), ScaledUiAmount, Pausable, ConfidentialTransfe
 auto-approving), TransferHook (no program set), TokenMetadata. Two of them can turn a routine
 corporate action into a catastrophic sale if ignored.
 
-- **Scaled UI amount.** The issuer publishes a multiplier for splits and stock dividends. A 10-for-1
-  split makes the price per token fall by ten times while the holder's unit count rises by ten times.
-  A floor compared against that price would fire and sell the whole position at what looks like a
-  90% loss. So the multiplier in force when a floor is armed is stored with the order, and on every
-  cycle the keeper reads the mint's current multiplier before comparing anything. If it changed, the
-  floor is rebased by the ratio, the new floor and multiplier are persisted, a rebase event is
-  recorded on the order and shown on the row, the breach counter resets, and that cycle evaluates
-  nothing. The next cycle evaluates against the rebased floor. The keeper reads the *effective*
-  multiplier from the raw extension bytes (a pending multiplier with a past effective timestamp), not
-  the parser's "current" field, which on NVDAx and SPYx was stale when checked.
+- **Scaled UI amount.** The issuer publishes a multiplier. It changes for two different reasons, and
+  they need opposite responses. At a split, the displayed price per token moves by the multiplier
+  ratio while the position's value does not; a floor compared against that price would fire and sell
+  the whole position at what looks like a 90% loss, so the floor must be rebased by the ratio. At a
+  dividend accrual, which is routine (NVDAx sits at 1.0017 and SPYx at 1.0057 from accruals alone),
+  each raw token becomes worth slightly more, the displayed balance ticks up, and the displayed price
+  does not move at all; rebasing there would quietly loosen the user's floor at every dividend. The
+  multiplier alone cannot tell the two apart. So the keeper reads the mint and the price together:
+  the multiplier in force at arming is stored with the order; on any change it resets the breach
+  count, records the change and evaluates nothing that cycle; on the next reading it compares the
+  displayed price with the pre-change displayed price. If the price moved by the ratio it is a split
+  and the floor is rebased, persisted and shown on the row as such. If the price stayed put it is an
+  accrual, recorded on the row, and the floor is left exactly where the user set it. Changes under
+  about 1% are accruals by construction. If no pre-change price is on record, a material change is
+  treated as a split, the dangerous case. Prices in this system are per displayed token: Jupiter's
+  price equals the raw-unit market price divided by the effective multiplier, verified against
+  two-way swap quotes that settle in raw units. The keeper reads the *effective* multiplier from
+  the raw extension bytes (a pending multiplier with a past effective timestamp), not the parser's
+  "current" field, which on NVDAx and SPYx was stale when checked.
 - **Pausable.** If the mint is paused, no route is requested and nothing is sold. The refusal and the
   reason are recorded on the order and shown as a distinct state.
 - **Transfer hook.** Currently no program is set. If one ever is, transfers need extra accounts the

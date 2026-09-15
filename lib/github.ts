@@ -12,8 +12,10 @@ export type Order = {
   last_price_usd: string | null; pending_sig: string | null; pending_amount_raw: string | null; pending_since: string | null; revoke_sig: string | null;
   // mint state guard
   multiplier: string | null; rebases: Rebase[]; blocked: "paused" | "transfer_hook" | "mint_unreadable" | null;
+  multiplier_event: { detected_at: string; old_multiplier: string; new_multiplier: string; pre_price_usd: string | null } | null;
 };
-export type Rebase = { at: string; old_floor: string; new_floor: string; old_multiplier: string; new_multiplier: string };
+/** A multiplier change, classified on the reading after it: a split moves the floor by the ratio, an accrual leaves it untouched. */
+export type Rebase = { at: string; kind: "split" | "accrual"; old_floor: string; new_floor: string; old_multiplier: string; new_multiplier: string; pre_price_usd: string | null; post_price_usd: string };
 type Store = { orders: Order[] };
 
 const REPO = process.env.GITHUB_REPO ?? "Lideeyah/gapless";

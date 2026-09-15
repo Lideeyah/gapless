@@ -17,7 +17,7 @@ def fresh_order(**over):
          "status": "armed", "breach_count": 0, "last_checked_at": None, "delegation_sig": "x", "fill_sig": None, "fill_price_usd": None, "filled_at": None,
          "failure_reason": None, "created_at": "2026-09-14T00:00:00Z", "order_sig": "y", "delegate": "", "remaining_raw": "100000000", "fills": [],
          "last_decision": None, "last_session": None, "last_price_usd": None, "pending_sig": None, "pending_amount_raw": None, "pending_since": None,
-         "revoke_sig": None, "multiplier": LIVE["multiplier"], "rebases": [], "blocked": None}
+         "revoke_sig": None, "multiplier": LIVE["multiplier"], "rebases": [], "blocked": None, "multiplier_event": None}
     o.update(over); return o
 
 def cycle(order, state, price, session="open"):
@@ -42,18 +42,37 @@ def cycle(order, state, price, session="open"):
 results = []
 def check(name, ok, detail): results.append((name, ok, detail)); print(("PASS " if ok else "FAIL ") + name + " | " + detail)
 
-# 3. multiplier change (10-for-1 split) with the price far below the floor: must rebase, reset, record, not fire
+# 3a. SPLIT: price on the reading after the change moved by the ratio -> rebase, reset, record, no fire
 split = dict(LIVE, multiplier=str(float(LIVE["multiplier"]) * 10))
-o, routed, log = cycle(fresh_order(breach_count=2), split, 21.45, "open")
-ratio = Decimal(LIVE["multiplier"]) / Decimal(split["multiplier"])
-expect = (Decimal("214.50") * ratio).quantize(Decimal("0.000001"))
-check("3 rebase on multiplier change", o["floor_price_usd"] == str(expect) and o["breach_count"] == 0 and len(o["rebases"]) == 1 and o["status"] == "armed" and routed == 0,
-      f"floor 214.50 -> {o['floor_price_usd']} (expected {expect}), breach {o['breach_count']}, rebases {len(o['rebases'])}, status {o['status']}, routes {routed} | {log[-1]}")
-# 4. next cycle evaluates normally against the rebased floor (price 21.60 is above 21.43 -> hold; 21.40 is below -> breach 1/1 in open -> triggered)
-o2, routed2, log2 = cycle(o, split, 21.60, "open")
-o3, routed3, log3 = cycle(o, split, 21.40, "open")
-check("4 next cycle evaluates against rebased floor", o2["status"] == "armed" and o2["breach_count"] == 0 and o3["status"] == "triggered" and o3["breach_count"] == 1,
-      f"at 21.60: {log2[-1]} || at 21.40: {log3[-1]}")
+o, _, log = cycle(fresh_order(), LIVE, 214.0, "open")                 # establishes the pre-change displayed price
+o, routed, log = cycle(o, split, 21.40, "open")                        # change detected: skip, reset
+check("3a change detected: skip cycle, reset, no route", o["multiplier_event"] is not None and o["breach_count"] == 0 and routed == 0 and o["floor_price_usd"] == "214.50", log[-1])
+o, routed, log = cycle(o, split, 21.60, "open")                        # next reading: classify
+ev = o["rebases"][-1]
+check("3b split classified and floor rebased by the ratio", ev["kind"] == "split" and o["floor_price_usd"] == "21.450000" and o["multiplier_event"] is None and o["status"] == "armed",
+      f"kind={ev['kind']} floor={o['floor_price_usd']} | {log[-2]} | {log[-1]}")
+o3, _, log3 = cycle(o, split, 21.40, "open")
+check("4 next cycle evaluates against the rebased floor", o3["breach_count"] == 1 and o3["status"] == "triggered", log3[-1])
+# 3c. ACCRUAL (small, routine): multiplier +0.08%, displayed price unchanged -> floor untouched
+accrual = dict(LIVE, multiplier=str(float(LIVE["multiplier"]) * 1.0008))
+o, _, _ = cycle(fresh_order(), LIVE, 214.0, "open")
+o, _, _ = cycle(o, accrual, 214.0, "open")
+o, routed, log = cycle(o, accrual, 214.1, "open")
+ev = o["rebases"][-1]
+check("3c small accrual leaves the floor exactly where it was set", ev["kind"] == "accrual" and o["floor_price_usd"] == "214.50" and o["multiplier"] == accrual["multiplier"] and routed == 0,
+      f"kind={ev['kind']} floor={o['floor_price_usd']} multiplier={o['multiplier']} | {log[-2]}")
+# 3d. ACCRUAL (large, e.g. a 5% special dividend): ratio is material but the displayed price did not move -> accrual
+big = dict(LIVE, multiplier=str(float(LIVE["multiplier"]) * 1.05))
+o, _, _ = cycle(fresh_order(), LIVE, 214.0, "open")
+o, _, _ = cycle(o, big, 214.0, "open")
+o, routed, log = cycle(o, big, 213.8, "open")
+ev = o["rebases"][-1]
+check("3d large accrual with flat displayed price is not a split", ev["kind"] == "accrual" and o["floor_price_usd"] == "214.50", f"kind={ev['kind']} floor={o['floor_price_usd']} | {log[-2]}")
+# 3e. no pre-change price on record (never evaluated before the change): material ratio -> assume split
+o, _, _ = cycle(fresh_order(), split, 21.40, "open")
+o, _, log = cycle(o, split, 21.60, "open")
+ev = o["rebases"][-1]
+check("3e no pre-change price: material ratio assumed to be a split", ev["kind"] == "split" and o["floor_price_usd"] == "21.450000", f"kind={ev['kind']} floor={o['floor_price_usd']}")
 # 5. paused: no route, refusal recorded, even with the price far below the floor
 o, routed, log = cycle(fresh_order(), dict(LIVE, paused=True), 100.0, "open")
 check("5 paused mint refused", o["blocked"] == "paused" and routed == 0 and o["status"] == "armed" and o["breach_count"] == 0, f"blocked={o['blocked']} routes={routed} | {log[-1]}")
