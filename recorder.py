@@ -44,7 +44,7 @@ def fetch_prices(mints):
     req = urllib.request.Request(PRICE_URL + ",".join(mints), headers={"User-Agent": "gapless-recorder"})
     with urllib.request.urlopen(req, timeout=20) as resp:
         data = json.load(resp)
-    return {m: float(data[m]["usdPrice"]) for m in mints if m in data and "usdPrice" in data[m]}
+    return {m: float(data[m]["usdPrice"]) for m in mints if m in data and data[m].get("usdPrice") is not None}  # a null price is a missing price for that mint only
 
 
 def main():

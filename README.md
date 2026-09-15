@@ -313,6 +313,14 @@ hole is real and stays visible in the data.
   hidden. Do not read this as five-minute precision, for the recorder or the keeper.
 - **Scheduled workflows pause after 60 days of no repository activity.** The workflows' own commits
   count as activity, but if they ever stop, they must be re-enabled by hand.
+- **Order data is public.** `data/orders.json` lives in this public repository and `/api/orders?owner=`
+  returns any address's orders. Nothing in an order is secret (every field is also on chain), but the
+  association of a wallet with a floor is visible to anyone. A production version would keep the
+  index private.
+- **The demo capture replays the recorder's labels.** Local capture mode drives the interface with the
+  `session` column of `data/prices.csv`, which has no holiday calendar. If a recorded window ever
+  spans a US market holiday, the capture would show `open` where the live keeper would apply `weekend`
+  rules. No holiday falls in the current window.
 - **Public RPC.** Holdings are read through the public Solana RPC from the browser, which rate-limits
   aggressively. If the holdings row reports an RPC error, reload, or set `NEXT_PUBLIC_RPC_URL`.
 - **USDC account.** Execution creates the user's USDC associated token account if it does not exist,
