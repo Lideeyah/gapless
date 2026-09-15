@@ -10,8 +10,8 @@
       "decimals": 8,
       "floor_price_usd": "215",
       "status": "armed",
-      "breach_count": 0,
-      "last_checked_at": null,
+      "breach_count": 1,
+      "last_checked_at": "2026-09-15T20:35:01Z",
       "delegation_sig": "RSgWWYvcJQtjrncLYUYDFFmVz3HupSUGV9t1j7MNN54dRPMJBHSDj4D6hW6rDHxUnYaPwTwxSgu5ZuswJZNtuYr",
       "fill_sig": null,
       "fill_price_usd": null,
@@ -22,9 +22,9 @@
       "delegate": "HbJ7XbcY2VsunoeK9v6o3FwKGvwfTBQ7horU9d3fonKs",
       "remaining_raw": "989239",
       "fills": [],
-      "last_decision": null,
-      "last_session": null,
-      "last_price_usd": null,
+      "last_decision": "breach 1/2 in overnight: 212.0386 at or below floor; waiting for confirmation",
+      "last_session": "overnight",
+      "last_price_usd": "212.03860374982938",
       "pending_sig": null,
       "pending_amount_raw": null,
       "pending_since": null,
@@ -32,7 +32,9 @@
       "multiplier": "1.001701196801074",
       "rebases": [],
       "blocked": null,
-      "multiplier_event": null
+      "multiplier_event": null,
+      "breach_session": "overnight",
+      "breach_last_at": "2026-09-15T20:35:01Z"
     }
   ]
 }
