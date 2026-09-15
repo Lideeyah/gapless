@@ -37,9 +37,10 @@ export async function verifyApprove(sig: string, owner: string, tokenAccount: st
     if (!p || !["approve", "approveChecked"].includes(p.type ?? "")) return false;
     const info = p.info ?? {};
     const amt = (info.tokenAmount as { amount?: string } | undefined)?.amount ?? (info.amount as string | undefined);
-    return info.source === tokenAccount && info.delegate === KEEPER_PUBKEY && amt === amountRaw;
+    // The token account's owner must be the wallet that claims the order: proceeds are paid to owner_pubkey.
+    return info.source === tokenAccount && info.delegate === KEEPER_PUBKEY && amt === amountRaw && info.owner === owner;
   });
-  return ok ? null : "approve transaction does not delegate this amount of this account to the keeper";
+  return ok ? null : "approve transaction does not delegate this amount of this account, owned by this wallet, to the keeper";
 }
 
 /** The order transaction must be signed by the owner and carry a memo whose JSON matches the order. */

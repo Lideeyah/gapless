@@ -177,6 +177,30 @@ a twice-hourly cron only as a backstop (see "Why continuous runs" below). Each c
 
 The run exits zero on any data or network failure. A broken schedule is worse than a missed check.
 
+What "consecutive readings" means in code: consecutive keeper readings at or below the floor, within
+one regime, with no more than 30 minutes between counted readings. A reading Jupiter omits or a read
+that fails does not count as a non-breach and does not reset the sequence; a regime change or a
+30-minute gap does. A sequence started in `overnight` cannot be completed by the first `open` reading.
+
+Execution guards, in order, each of which stops the trade: the order's delegate must be this
+keeper's key; the mint guard must pass; the token account's owner on chain must be the order's
+owner (proceeds are paid to that owner); the keeper must still be the delegate; the account must
+have a balance (an emptied account is shown as "nothing left to sell" rather than retried forever);
+the keeper wallet must hold at least 0.005 SOL for rent and fees; the Jupiter build may reference
+only known programs (Jupiter v6, the token programs, the associated-token program, System, Compute
+Budget), must route from the keeper's source account to the owner's USDC account, and may ask for
+no signer but the keeper; the transaction must fit in 1232 bytes and simulate cleanly. The amount is
+never more than the delegated amount and never more than the balance. In `weekend`, if price impact
+is still above tolerance at one eighth of the position, nothing is sold that cycle.
+
+Settlement is decided from the chain, never from memory. `executing` is committed together with the
+signature, the amount, the multiplier in force and the blockhash's last valid block height before the
+send. If confirmation is not seen within 60 seconds the order stays `executing`; each later cycle asks
+the chain: confirmed means the fill is recorded from the real USDC balance change (and the order waits
+if that change is not yet servable), a failed status means `failed`, and "never landed" is declared
+only after the blockhash has expired and the transaction is still absent. A run that finds an order
+settled at the top of a cycle does not evaluate it again in that cycle.
+
 **The hot key.** The keeper signs execution transactions with a keypair stored as the GitHub Actions
 secret `KEEPER_SECRET_KEY`. This is a hackathon-grade arrangement. What the key can do: act as SPL
 delegate on token accounts whose owners explicitly approved it, up to the approved amount, and pay
@@ -277,8 +301,13 @@ hole is real and stays visible in the data.
 
 ## Limitations
 
-- **No holiday calendar.** US market holidays and early closes are labeled as if the market were
-  open. Cross-reference the NYSE calendar when reading the data.
+- **Holiday calendar, two behaviours.** The recorder's `session_state()` has no calendar, so
+  `data/prices.csv` labels NYSE holidays and the afternoons of half-days as `open`; cross-reference
+  the NYSE calendar when reading the data. The keeper does not trade on those labels: it layers
+  `keeper/market_calendar.py` (NYSE full closures and 13:00 ET early closes for 2026 and 2027) on top
+  and executes a weekday holiday under `weekend` rules and a half-day afternoon under `overnight`
+  rules. When the two disagree the keeper's log says so on the run line. The table must be extended
+  each year; an unlisted holiday falls back to the recorder's label, which is `open`.
 - **Cron drift.** GitHub Actions schedules are best-effort. The `timestamp_utc` column records when
   a reading was actually taken, so gaps and uneven spacing are visible in the data rather than
   hidden. Do not read this as five-minute precision, for the recorder or the keeper.

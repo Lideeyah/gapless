@@ -44,6 +44,7 @@ jobs:
           GIT_AUTHOR_NAME: Lydia Solomon
           GIT_AUTHOR_EMAIL: lydiasolomon137@gmail.com
         run: |
+          if [ "${KEEPER_DRY_RUN}" = "1" ]; then python keeper/keeper.py; exit 0; fi   # a dry run is one pass and never owns the chain
           end=$((SECONDS + 5*3600 + 40*60))
           while [ "$SECONDS" -lt "$end" ]; do
             python keeper/keeper.py || echo "keeper exited non-zero; continuing"
@@ -51,7 +52,7 @@ jobs:
           done
 
       - name: Hand off to the next run (unless one is already queued)
-        if: always()
+        if: always() && !inputs.dry_run
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

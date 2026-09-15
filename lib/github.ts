@@ -11,7 +11,7 @@ export type Order = {
   order_sig: string; delegate: string; remaining_raw: string; fills: Fill[]; last_decision: string | null; last_session: string | null;
   last_price_usd: string | null; pending_sig: string | null; pending_amount_raw: string | null; pending_since: string | null; revoke_sig: string | null;
   // mint state guard
-  multiplier: string | null; rebases: Rebase[]; blocked: "paused" | "transfer_hook" | "mint_unreadable" | null;
+  multiplier: string | null; rebases: Rebase[]; blocked: "paused" | "transfer_hook" | "mint_unreadable" | "no_balance" | null;
   multiplier_event: { detected_at: string; old_multiplier: string; new_multiplier: string; pre_price_usd: string | null } | null;
 };
 /** A multiplier change, classified on the reading after it: a split moves the floor by the ratio, an accrual leaves it untouched. */
@@ -40,15 +40,20 @@ export async function readOrders(): Promise<{ store: Store; sha: string | null }
   return { store: JSON.parse(Buffer.from(meta.content, "base64").toString("utf8")) as Store, sha: meta.sha };
 }
 
-/** Read-modify-write with one retry if the file moved under us. */
-export async function updateOrders(mutate: (s: Store) => string): Promise<void> {
-  if (!storeConfigured()) throw new Error("order store is not configured (GITHUB_TOKEN missing on the server)");
+/** Read-modify-write with one retry if the file moved under us. `mutate` returns a commit message, or null to write nothing. */
+export async function updateOrders(mutate: (s: Store) => string | null): Promise<boolean> {
+  if (!storeConfigured() && !(process.env.NODE_ENV !== "production" && process.env.ORDERS_LOCAL_FILE)) throw new Error("order store is not configured (GITHUB_TOKEN missing on the server)");
   for (let attempt = 0; attempt < 2; attempt++) {
     const { store, sha } = await readOrders();
     const message = mutate(store);
+    if (message === null) return false;
+    if (process.env.NODE_ENV !== "production" && process.env.ORDERS_LOCAL_FILE) { // local inspection only
+      const { writeFileSync } = await import("fs"); writeFileSync(process.env.ORDERS_LOCAL_FILE, JSON.stringify(store, null, 2) + "\n"); return true;
+    }
     const body = JSON.stringify({ message, sha, committer: AUTHOR, author: AUTHOR, content: Buffer.from(JSON.stringify(store, null, 2) + "\n").toString("base64") });
     const res = await fetch(API, { method: "PUT", headers: { ...headers(), "Content-Type": "application/json" }, body });
-    if (res.ok) return;
+    if (res.ok) return true;
     if (res.status !== 409 || attempt === 1) throw new Error(`orders.json write failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
   }
+  return false;
 }

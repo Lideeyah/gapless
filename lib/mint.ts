@@ -3,10 +3,10 @@ import { PublicKey } from "@solana/web3.js";
 import { rpc } from "@/lib/chain";
 
 export const TOKEN_2022 = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
-export type MintState = { multiplier: string; paused: boolean; hookProgram: string | null; permanentDelegate: string | null; extensions: number[] };
+export type MintState = { decimals: number; multiplier: string; paused: boolean; hookProgram: string | null; permanentDelegate: string | null; extensions: number[] };
 
 export function decodeMintState(raw: Buffer, nowTs: number): MintState {
-  const st: MintState = { multiplier: "1", paused: false, hookProgram: null, permanentDelegate: null, extensions: [] };
+  const st: MintState = { decimals: raw[44], multiplier: "1", paused: false, hookProgram: null, permanentDelegate: null, extensions: [] }; // decimals byte at offset 44 of the base mint
   let i = 166;
   while (i + 4 <= raw.length) {
     const t = raw.readUInt16LE(i), n = raw.readUInt16LE(i + 2); i += 4;

@@ -26,6 +26,8 @@ from decimal import Decimal, ROUND_DOWN
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from recorder import PRICE_URL, session_state  # noqa: E402  the one session-state implementation
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from market_calendar import execution_session  # noqa: E402  holidays and half-days, execution only
 
 from solders.address_lookup_table_account import AddressLookupTableAccount  # noqa: E402
 from solders.hash import Hash  # noqa: E402
@@ -47,7 +49,11 @@ FORCE_SESSION = os.environ.get("KEEPER_FORCE_SESSION")     # test hook: override
 LOCAL_ORDERS = os.environ.get("KEEPER_ORDERS_FILE")        # test hook: local file instead of GitHub
 AUTHOR = {"name": os.environ.get("GIT_AUTHOR_NAME", "Lydia Solomon"),
           "email": os.environ.get("GIT_AUTHOR_EMAIL", "lydiasolomon137@gmail.com")}
-EXECUTING_TIMEOUT_S = 180  # a blockhash is dead well before this; after it, an unseen pending tx cannot land
+BREACH_WINDOW_S = 30 * 60   # a confirmation sequence older than this is stale; "consecutive" means within a few cycles
+MIN_KEEPER_LAMPORTS = 5_000_000  # 0.005 SOL: two ATA rents plus fees; below this the keeper declines to execute
+ALLOWED_PROGRAMS = {"JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4", "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+                    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+                    "11111111111111111111111111111111", "ComputeBudget111111111111111111111111111111"}
 
 USDC = Pubkey.from_string("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
 USDC_DECIMALS = 6
@@ -103,8 +109,28 @@ def load_orders():
     return json.loads(base64.b64decode(meta["content"])), meta["sha"]
 
 
-def save_orders(store, sha, message):
-    """Commit the store. Returns the new sha. On a 409 (file moved), reload, re-apply our orders by id, retry once."""
+TERMINAL = ("filled", "revoked")
+
+
+def merge_touched(fresh_orders, touched):
+    """Re-apply only the orders this run changed onto a freshly loaded store. An order the app closed meanwhile
+    (revoked) stays closed unless we already moved the chain for it (executing/filled)."""
+    ours = {o["id"]: o for o in touched}
+    out = []
+    for f in fresh_orders:
+        mine = ours.get(f["id"])
+        if mine is None:
+            out.append(f)
+        elif f["status"] in TERMINAL and mine["status"] not in ("executing", "filled"):
+            out.append(f)  # the app's terminal state wins over our stale evaluation
+        else:
+            out.append(mine)
+    return out
+
+
+def save_orders(store, sha, message, touched=None):
+    """Commit the store. Returns the new sha. On a 409 (file moved), reload, re-apply only the orders this run
+    touched (or all if unspecified), and retry once."""
     body = json.dumps(store, indent=2) + "\n"
     if LOCAL_ORDERS:
         with open(LOCAL_ORDERS, "w") as f:
@@ -116,10 +142,9 @@ def save_orders(store, sha, message):
     except RuntimeError as exc:
         if "HTTP 409" not in str(exc):
             raise
-        log("orders.json moved under us; reloading and re-applying this run's state once")
+        log("orders.json moved under us; reloading and re-applying only this run's changes once")
         fresh, fresh_sha = load_orders()
-        ours = {o["id"]: o for o in store["orders"]}
-        fresh["orders"] = [ours.get(o["id"], o) for o in fresh["orders"]] + [o for o in store["orders"] if o["id"] not in {x["id"] for x in fresh["orders"]}]
+        fresh["orders"] = merge_touched(fresh["orders"], touched if touched is not None else store["orders"])
         store["orders"] = fresh["orders"]
         payload["content"] = base64.b64encode((json.dumps(fresh, indent=2) + "\n").encode()).decode()
         payload["sha"] = fresh_sha
@@ -165,18 +190,23 @@ def fetch_prices(mints):
     data = http_json(PRICE_URL + ",".join(mints))
     out = {}
     for m in mints:
-        if m in data and data[m].get("usdPrice") is not None:
+        if m in data and data[m].get("usdPrice") is not None and Decimal(str(data[m]["usdPrice"])) > 0:
             out[m] = (Decimal(str(data[m]["usdPrice"])), Decimal(str((data[m].get("scaledUiConfig") or {}).get("multiplier") or 1)))
     return out
 
 
-def delegation_on_chain(token_account):
+def token_account_state(token_account):
+    """(owner, delegate, delegated raw amount, balance raw amount) as the chain has it now; owner None if not a token account."""
     info = rpc("getAccountInfo", [token_account, {"encoding": "jsonParsed", "commitment": "confirmed"}])["value"]
     parsed = info["data"]["parsed"] if info and isinstance(info["data"], dict) else None
     if not parsed or parsed.get("type") != "account":
-        return None, 0
+        return None, None, 0, 0
     p = parsed["info"]
-    return p.get("delegate"), int((p.get("delegatedAmount") or {}).get("amount") or 0)
+    return p.get("owner"), p.get("delegate"), int((p.get("delegatedAmount") or {}).get("amount") or 0), int(p["tokenAmount"]["amount"])
+
+
+def keeper_lamports(pubkey):
+    return int(rpc("getBalance", [str(pubkey), {"commitment": "confirmed"}])["value"])
 
 
 # ---------------------------------------------------------------- Token-2022 mint state (pre-trade guard)
@@ -236,7 +266,7 @@ def classify_multiplier_event(o, price):
     """
     ev = o["multiplier_event"]
     ratio = Decimal(ev["old_multiplier"]) / Decimal(ev["new_multiplier"])
-    pre = Decimal(ev["pre_price_usd"]) if ev.get("pre_price_usd") else None
+    pre = Decimal(ev["pre_price_usd"]) if ev.get("pre_price_usd") and Decimal(ev["pre_price_usd"]) > 0 else None
     old_floor = Decimal(o["floor_price_usd"])
     kind = "accrual"
     if abs(ratio.ln()) >= SPLIT_MIN_LOG_RATIO:
@@ -270,7 +300,12 @@ def guard_mint(o, tag):
     elif Decimal(stored) != Decimal(st["multiplier"]):
         # Cycle one of two: record the change, reset the breach count, evaluate nothing. The next reading decides
         # whether this was a split (rebase the floor) or a dividend accrual (leave the floor exactly where it was set).
-        o["multiplier_event"] = {"detected_at": now_iso(), "old_multiplier": stored, "new_multiplier": st["multiplier"], "pre_price_usd": o.get("last_price_usd")}
+        pending = o.get("multiplier_event")
+        if pending:  # changed again before classification: keep the original baseline, compound the ratio
+            o["multiplier_event"] = {**pending, "new_multiplier": st["multiplier"], "changes": int(pending.get("changes", 1)) + 1}
+        else:
+            o["multiplier_event"] = {"detected_at": now_iso(), "old_multiplier": stored, "new_multiplier": st["multiplier"],
+                                     "pre_price_usd": o.get("last_price_usd"), "changes": 1}
         o["multiplier"], o["breach_count"] = st["multiplier"], 0
         if o["status"] == "triggered":
             o["status"] = "armed"  # a trigger counted before the change means nothing after it
@@ -292,9 +327,14 @@ def jup_build(input_mint, amount, taker, slippage_bps, dest_usdc_ata):
     return http_json(f"{BUILD_URL}?{q}")
 
 
-def usdc_received(sig, owner):
-    """Real USDC delta for the owner from the confirmed transaction's token balances, or None if unavailable."""
-    tx = rpc("getTransaction", [sig, {"encoding": "json", "maxSupportedTransactionVersion": 0, "commitment": "confirmed"}])
+def usdc_received(sig, owner, attempts=6):
+    """Real USDC delta for the owner from the confirmed transaction's token balances, or None if not yet servable."""
+    tx = None
+    for i in range(attempts):
+        tx = rpc("getTransaction", [sig, {"encoding": "json", "maxSupportedTransactionVersion": 0, "commitment": "confirmed"}])
+        if tx or i == attempts - 1:
+            break
+        time.sleep(1.5)
     if not tx:
         return None
     def total(entries):
@@ -321,23 +361,45 @@ def fill_price(out_usdc_raw, in_raw, decimals, multiplier):
 
 
 # ---------------------------------------------------------------- execution
-def build_execution(order, keeper, rules):
-    """Size (weekend split), build, simulate and sign. Returns (amount_raw, signed_b64, signature, build)."""
+def check_build(build, keeper_ata, user_usdc):
+    """Refuse to sign anything the keeper does not understand: unknown programs, or a swap that does not involve
+    the keeper's source account and the owner's USDC account."""
+    ixs = build["computeBudgetInstructions"] + build["setupInstructions"] + [build["swapInstruction"]] + \
+          ([build["cleanupInstruction"]] if build.get("cleanupInstruction") else []) + build.get("otherInstructions", [])
+    bad = sorted({ix["programId"] for ix in ixs if ix["programId"] not in ALLOWED_PROGRAMS})
+    if bad:
+        raise RuntimeError(f"refusing to sign: unexpected program(s) in Jupiter build {bad}")
+    keys = {a["pubkey"] for a in build["swapInstruction"]["accounts"]}
+    if str(keeper_ata) not in keys or str(user_usdc) not in keys:
+        raise RuntimeError("refusing to sign: swap instruction does not reference the keeper's source account and the owner's USDC account")
+    for ix in ixs:
+        for a in ix["accounts"]:
+            if a["isSigner"] and a["pubkey"] != str(build["_taker"]):
+                raise RuntimeError(f"refusing to sign: build asks for a signer other than the keeper ({a['pubkey']})")
+
+
+def build_execution(order, keeper, rules, sell_cap):
+    """Size (never above sell_cap; weekend split by impact), build, verify, simulate and sign.
+    Returns (amount_raw, signed_b64, signature, last_valid_block_height, build)."""
     mint = Pubkey.from_string(order["mint"])
     owner = Pubkey.from_string(order["owner_pubkey"])
-    remaining = int(order["remaining_raw"])
+    remaining = min(int(order["remaining_raw"]), int(sell_cap))
     amount = remaining
     user_usdc = ata(owner, USDC, TOKEN)
     keeper_ata = ata(keeper.pubkey(), mint, TOKEN_2022)
 
-    build = None
-    for _ in range(4):  # weekend: halve until price impact is within tolerance; the rest stays armed
+    build, impact_bps = None, Decimal(0)
+    for _ in range(4):  # weekend: halve until price impact is within tolerance
         build = jup_build(mint, amount, keeper.pubkey(), rules["slippageBps"], user_usdc)
         impact_bps = Decimal(str(build.get("priceImpactPct") or 0)) * 10000
-        if not rules["splitOnImpact"] or impact_bps <= rules["slippageBps"] or amount <= max(1, remaining // 8):
+        if not rules["splitOnImpact"] or impact_bps <= rules["slippageBps"]:
             break
+        if amount <= max(1, remaining // 8):
+            raise RuntimeError(f"price impact {impact_bps:.1f}bps still exceeds {rules['slippageBps']}bps at one eighth of the position; not selling into this book")
         log(f"  weekend impact check: {impact_bps:.1f}bps > {rules['slippageBps']}bps at {amount}; halving to {amount // 2}")
         amount //= 2
+    build["_taker"] = keeper.pubkey()
+    check_build(build, keeper_ata, user_usdc)
 
     ixs = [from_jup_ix(i) for i in build["computeBudgetInstructions"]]
     ixs += [ix_create_ata_idempotent(keeper.pubkey(), keeper.pubkey(), mint, TOKEN_2022),
@@ -352,24 +414,27 @@ def build_execution(order, keeper, rules):
             for k, v in (build.get("addressesByLookupTableAddress") or {}).items()]
 
     def compile_and_sign(instructions):
-        blockhash = rpc("getLatestBlockhash", [{"commitment": "confirmed"}])["value"]["blockhash"]
-        msg = MessageV0.try_compile(keeper.pubkey(), instructions, alts, Hash.from_string(blockhash))
+        bh = rpc("getLatestBlockhash", [{"commitment": "confirmed"}])["value"]
+        msg = MessageV0.try_compile(keeper.pubkey(), instructions, alts, Hash.from_string(bh["blockhash"]))
         tx = VersionedTransaction(msg, [keeper])
-        return base64.b64encode(bytes(tx)).decode(), str(tx.signatures[0])
+        raw = base64.b64encode(bytes(tx)).decode()
+        if len(bytes(tx)) > 1232:
+            raise RuntimeError(f"transaction is {len(bytes(tx))} bytes, over the 1232 byte limit")
+        return raw, str(tx.signatures[0]), int(bh["lastValidBlockHeight"])
 
-    raw, _ = compile_and_sign(ixs)
+    raw, _, _ = compile_and_sign(ixs)
     sim = rpc("simulateTransaction", [raw, {"encoding": "base64", "commitment": "confirmed"}])["value"]
     if sim.get("err"):
         raise RuntimeError(f"simulation failed: {sim['err']} | {' / '.join((sim.get('logs') or [])[-4:])}")
     units = int(sim.get("unitsConsumed") or 400_000)
-    raw, sig = compile_and_sign([ix_compute_limit(min(1_400_000, int(units * 1.2) + 20_000))] + ixs)
-    log(f"  built: size={len(base64.b64decode(raw))}B units~{units} route={[s['swapInfo']['label'] for s in build['routePlan']]} "
+    raw, sig, lvbh = compile_and_sign([ix_compute_limit(min(1_400_000, int(units * 1.2) + 20_000))] + ixs)
+    log(f"  built: size={len(base64.b64decode(raw))}B units~{units} impact={impact_bps:.1f}bps route={[s['swapInfo']['label'] for s in build['routePlan']]} "
         f"quote out={Decimal(build['outAmount']) / 10**USDC_DECIMALS:.4f} USDC for {amount} raw")
-    return amount, raw, sig, build
+    return amount, raw, sig, lvbh, build
 
 
 def send_and_confirm(raw, sig):
-    sent = rpc("sendTransaction", [raw, {"encoding": "base64", "skipPreflight": False, "maxRetries": 3}])
+    sent = rpc("sendTransaction", [raw, {"encoding": "base64", "skipPreflight": False, "preflightCommitment": "confirmed", "maxRetries": 3}])
     log(f"  sent {sent}")
     for _ in range(30):
         time.sleep(2)
@@ -378,7 +443,7 @@ def send_and_confirm(raw, sig):
             return
         if st == "failed":
             raise RuntimeError(f"transaction {sig} failed on chain")
-    raise RuntimeError(f"transaction {sig} not confirmed within 60s")
+    raise RuntimeError(f"transaction {sig} not confirmed within 60s; left executing for recovery")
 
 
 def record_fill(o, sig, amount, out_raw, multiplier, session):
@@ -388,70 +453,112 @@ def record_fill(o, sig, amount, out_raw, multiplier, session):
     assert int(o["remaining_raw"]) >= 0, "executed more than delegated"  # invariant 4
     o["fill_sig"], o["fill_price_usd"], o["filled_at"] = sig, o["fills"][-1]["fill_price_usd"], o["fills"][-1]["at"]
     o["status"] = "filled" if int(o["remaining_raw"]) == 0 else "armed"
-    o["pending_sig"] = o["pending_amount_raw"] = o["pending_since"] = None
+    o["breach_count"] = 0  # a remainder must earn its own confirmations before the next slice
+    o["pending_sig"] = o["pending_amount_raw"] = o["pending_since"] = o["pending_last_valid_block_height"] = o["pending_multiplier"] = None
     o["failure_reason"] = None
 
 
-# ---------------------------------------------------------------- run
-def recover_executing(o, prices, session):
-    """A previous run died after persisting `executing`. Decide from the chain, never from memory."""
+def settle_pending(o, session):
+    """Decide a pending signature from the chain, never from memory. Returns the decision string.
+    Keeps `executing` while the outcome is genuinely unknown; only a dead blockhash plus no trace lets it fail."""
     sig, amount = o.get("pending_sig"), o.get("pending_amount_raw")
-    st = signature_status(sig) if sig else None
+    if not sig:
+        o["status"], o["failure_reason"] = "failed", "executing with no pending signature on record"
+        return o["failure_reason"]
+    st = signature_status(sig)
     if st == "confirmed":
         out = usdc_received(sig, Pubkey.from_string(o["owner_pubkey"]))
-        mult = prices.get(o["mint"], (None, Decimal(1)))[1]
-        record_fill(o, sig, int(amount), out if out is not None else 0, mult, session)
-        return f"recovered: pending {sig} landed on chain; {o['status']}"
+        if out is None:
+            return f"landed: {sig} is confirmed but its balance change is not servable yet; fill not recorded until it is"
+        record_fill(o, sig, int(amount), out, Decimal(o.get("pending_multiplier") or 1), session)
+        return f"{o['status']}: {amount} raw sold at {o['fill_price_usd']} USDC, signature {sig}"
     if st == "failed":
-        o["status"], o["failure_reason"] = "failed", f"pending transaction {sig} failed on chain"
+        o["status"], o["failure_reason"] = "failed", f"transaction {sig} failed on chain"
     else:
-        since = datetime.strptime(o.get("pending_since") or "1970-01-01T00:00:00Z", "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-        if (datetime.now(timezone.utc) - since).total_seconds() < EXECUTING_TIMEOUT_S:
-            return f"still executing: pending {sig} not visible yet; waiting"
-        o["status"], o["failure_reason"] = "failed", f"pending transaction {sig} never landed"
-    o["pending_sig"] = o["pending_amount_raw"] = o["pending_since"] = None
+        lvbh = int(o.get("pending_last_valid_block_height") or 0)
+        height = int(rpc("getBlockHeight", [{"commitment": "confirmed"}]))
+        if lvbh and height <= lvbh:
+            return f"still executing: {sig} not visible yet, blockhash valid until height {lvbh} (now {height})"
+        tx = rpc("getTransaction", [sig, {"encoding": "json", "maxSupportedTransactionVersion": 0, "commitment": "confirmed"}])
+        if tx:
+            return "landed late: transaction is servable; settling next cycle"  # signature_status lagged; try again
+        o["status"], o["failure_reason"] = "failed", f"transaction {sig} never landed (blockhash expired at height {lvbh})"
+    o["pending_sig"] = o["pending_amount_raw"] = o["pending_since"] = o["pending_last_valid_block_height"] = o["pending_multiplier"] = None
     return o["failure_reason"]
+
+
+def order_tag(o):
+    return f"[{o['id'][:8]} {o['ticker']} floor={o['floor_price_usd']}]"
+
+
+def count_breach(o, session, now_ts):
+    """Consecutive readings at or below the floor, within one regime and within BREACH_WINDOW_S.
+    A missing reading never resets the count; a regime change or a stale sequence does."""
+    last_at = o.get("breach_last_at")
+    last_ts = datetime.strptime(last_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp() if last_at else None
+    stale = last_ts is not None and now_ts - last_ts > BREACH_WINDOW_S
+    if o.get("breach_session") != session or stale or not o.get("breach_count"):
+        o["breach_count"] = 0
+    o["breach_count"] = int(o["breach_count"]) + 1
+    o["breach_session"], o["breach_last_at"] = session, now_iso()
 
 
 def run():
     _mint_state_cache.clear()  # mint state is never carried across cycles
-    session = FORCE_SESSION or session_state(datetime.now(timezone.utc))
+    now_utc = datetime.now(timezone.utc)
+    labelled = FORCE_SESSION or session_state(now_utc)
+    session = labelled if FORCE_SESSION else execution_session(now_utc, labelled)
     rules = REGIMES[session]
     store, sha = load_orders()
     open_orders = [o for o in store["orders"] if o["status"] in OPEN]
-    log(f"run session={session}{' (forced)' if FORCE_SESSION else ''} confirmations={rules['confirmations']} "
-        f"slippage={rules['slippageBps']}bps split={rules['splitOnImpact']} open_orders={len(open_orders)} dry_run={DRY_RUN}")
+    log(f"run session={session}{' (forced)' if FORCE_SESSION else ''}{'' if session == labelled else f' (calendar; recorder labels {labelled})'} "
+        f"confirmations={rules['confirmations']} slippage={rules['slippageBps']}bps split={rules['splitOnImpact']} open_orders={len(open_orders)} dry_run={DRY_RUN}")
     if not open_orders:
         log("nothing to check")
         return
     keeper = load_keeper()
+    touched = []
+    now = now_iso()
 
-    # 3. one batched price read; a failure is a gap in observation, not evidence (invariant 2)
+    # 1. settle anything left executing by an earlier run, from the chain, before anything else and without needing a price
+    for o in [x for x in open_orders if x["status"] == "executing"]:
+        o["last_checked_at"], o["last_session"] = now, session
+        try:
+            o["last_decision"] = settle_pending(o, session)
+        except Exception as exc:  # noqa: BLE001
+            o["last_decision"] = f"could not settle pending transaction this cycle: {exc}"
+        log(f"{order_tag(o)} {o['last_decision']}")
+        touched.append(o)
+
+    # 2. one batched price read; a failure is a gap in observation, not evidence (invariant 2)
     try:
         prices = fetch_prices(sorted({o["mint"] for o in open_orders}))
     except Exception as exc:  # noqa: BLE001
         log(f"price read failed ({exc}); no breach counts change, nothing fires this run")
+        if touched:
+            save_orders(store, sha, f"keeper {now} settle", touched)
         return
 
-    now = now_iso()
-    # 4. evaluate every open order
-    for o in open_orders:
-        tag = f"[{o['id'][:8]} {o['ticker']} floor={o['floor_price_usd']}]"
+    # 3. evaluate every open order that was not settled or left executing above (a settled order waits for the next cycle)
+    settled_ids = {x["id"] for x in touched}
+    for o in [x for x in open_orders if x["id"] not in settled_ids and x["status"] not in TERMINAL]:
         o["last_checked_at"], o["last_session"] = now, session
+        touched.append(o)
+        tag = order_tag(o)
         try:
-            if o["status"] == "executing":
-                o["last_decision"] = recover_executing(o, prices, session)
-                log(f"{tag} {o['last_decision']}")
-                continue
             if o["status"] == "failed":
                 o["status"] = "armed"  # retry path
+            if keeper and o.get("delegate") and o["delegate"] != str(keeper.pubkey()):
+                o["last_decision"] = f"delegate mismatch: order names {o['delegate']}, this keeper is {keeper.pubkey()}; not evaluated"
+                log(f"{tag} {o['last_decision']}")
+                continue
             blocked = guard_mint(o, tag)
             if blocked:
                 o["last_decision"] = blocked
                 log(f"{tag} {o['last_decision']}")
                 continue
             if o["mint"] not in prices:
-                o["last_decision"] = "no price from Jupiter this run; breach count unchanged"
+                o["last_decision"] = "no usable price from Jupiter this run; breach count unchanged"
                 log(f"{tag} {o['last_decision']}")
                 continue
             price, _ = prices[o["mint"]]
@@ -459,13 +566,13 @@ def run():
                 ev = classify_multiplier_event(o, price)
                 log(f"{tag} multiplier change classified as {ev['kind']}: price {ev['pre_price_usd']} -> {ev['post_price_usd']} against ratio "
                     f"{Decimal(ev['old_multiplier']) / Decimal(ev['new_multiplier']):.6f}; floor {ev['old_floor']} -> {ev['new_floor']}")
-                tag = f"[{o['id'][:8]} {o['ticker']} floor={o['floor_price_usd']}]"
+                tag = order_tag(o)
             o["last_price_usd"] = str(price)
             if price > Decimal(o["floor_price_usd"]):
                 o["breach_count"], o["status"] = 0, "armed"
                 o["last_decision"] = f"hold: {price:.4f} is above floor {o['floor_price_usd']}"
             else:
-                o["breach_count"] = int(o.get("breach_count", 0)) + 1
+                count_breach(o, session, now_utc.timestamp())
                 need = rules["confirmations"]
                 if o["breach_count"] >= need:
                     o["status"] = "triggered"
@@ -476,11 +583,11 @@ def run():
         except Exception as exc:  # noqa: BLE001
             o["last_decision"] = f"error evaluating: {exc}"
             log(f"{tag} {o['last_decision']}")
-    sha = save_orders(store, sha, f"keeper {now} evaluate")  # dry run still records evaluation; it only never sends
+    sha = save_orders(store, sha, f"keeper {now} evaluate", touched)
 
-    # 6/7. execute triggered orders
+    # 4. execute triggered orders
     for o in [x for x in open_orders if x["status"] == "triggered"]:
-        tag = f"[{o['id'][:8]} {o['ticker']} floor={o['floor_price_usd']}]"
+        tag = order_tag(o)
         try:
             if keeper is None:
                 o["last_decision"] = "triggered but KEEPER_SECRET_KEY is not configured; cannot execute"
@@ -490,35 +597,49 @@ def run():
                 o["last_decision"] = f"not executed: {o['blocked']}"
                 log(f"{tag} {o['last_decision']}")
                 continue
-            delegate, delegated = delegation_on_chain(o["token_account"])
-            if delegate != str(keeper.pubkey()) or delegated < int(o["remaining_raw"]):
+            owner_on_chain, delegate, delegated, balance = token_account_state(o["token_account"])
+            if owner_on_chain != o["owner_pubkey"]:
+                o["status"], o["last_decision"] = "revoked", f"token account owner on chain is {owner_on_chain}, not the order's owner; order closed"
+                log(f"{tag} {o['last_decision']}")
+                continue
+            if delegate != str(keeper.pubkey()) or delegated <= 0:
                 o["status"], o["last_decision"] = "revoked", f"delegation no longer on chain (delegate={delegate}, delegated={delegated}); order closed"
                 log(f"{tag} {o['last_decision']}")
                 continue
-            amount, raw, sig, _ = build_execution(o, keeper, rules)
+            if balance <= 0:
+                o["blocked"], o["last_decision"] = "no_balance", "token account balance is zero; nothing to sell (tokens moved out after arming)"
+                log(f"{tag} {o['last_decision']}")
+                continue
+            if keeper_lamports(keeper.pubkey()) < MIN_KEEPER_LAMPORTS:
+                o["last_decision"] = "keeper wallet is below the fee reserve; not executing until it is funded"
+                log(f"{tag} {o['last_decision']}")
+                continue
+            sell_cap = min(delegated, balance)  # never more than delegated, never more than is there
+            amount, raw, sig, lvbh, _ = build_execution(o, keeper, rules, sell_cap)
             if DRY_RUN:
-                o["last_decision"] = f"dry run: would execute {amount} raw, signature would be {sig}"
+                o["last_decision"] = f"dry run: would execute {amount} raw (cap {sell_cap}), signature would be {sig}"
                 log(f"{tag} {o['last_decision']}")
                 continue
             o["status"], o["pending_sig"], o["pending_amount_raw"], o["pending_since"] = "executing", sig, str(amount), now_iso()
+            o["pending_last_valid_block_height"], o["pending_multiplier"] = lvbh, mint_state(o["mint"])["multiplier"]
             o["last_decision"] = f"executing {amount} raw, pending {sig}"
-            sha = save_orders(store, sha, f"keeper {now_iso()} executing {o['ticker']}")
+            sha = save_orders(store, sha, f"keeper {now_iso()} executing {o['ticker']}", touched)
             log(f"{tag} {o['last_decision']}")
             send_and_confirm(raw, sig)
-            out = usdc_received(sig, Pubkey.from_string(o["owner_pubkey"]))
-            record_fill(o, sig, amount, out if out is not None else 0, Decimal(mint_state(o["mint"])["multiplier"]), session)
-            o["last_decision"] = f"{o['status']}: {amount} raw sold at {o['fill_price_usd']} USDC, signature {sig}"
+            o["last_decision"] = settle_pending(o, session)
             log(f"{tag} {o['last_decision']}")
-        except Exception as exc:  # noqa: BLE001  an execution failure returns the order to the retry path
+        except Exception as exc:  # noqa: BLE001
             if o["status"] == "executing":
-                o["last_decision"] = recover_executing(o, prices, session)  # decide from the chain, not from the exception
-                if o["status"] == "executing":
-                    o["status"], o["failure_reason"] = "failed", f"execution error: {exc}"
+                # the transaction may be in flight: ask the chain now; if it cannot say, stay executing for the next cycle
+                try:
+                    o["last_decision"] = settle_pending(o, session) + f" (after: {exc})"
+                except Exception as exc2:  # noqa: BLE001
+                    o["last_decision"] = f"execution outcome unknown ({exc}; settle: {exc2}); left executing for chain settlement"
             else:
                 o["status"], o["failure_reason"] = "failed", f"execution error: {exc}"
-            o["last_decision"] = o.get("failure_reason") or o["last_decision"]
+                o["last_decision"] = o["failure_reason"]
             log(f"{tag} {o['last_decision']}")
-    save_orders(store, sha, f"keeper {now_iso()} results")
+    save_orders(store, sha, f"keeper {now_iso()} results", touched)
     log("saved")
 
 
