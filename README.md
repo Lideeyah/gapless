@@ -134,8 +134,12 @@ corporate action into a catastrophic sale if ignored.
   displayed price with the pre-change displayed price. If the price moved by the ratio it is a split
   and the floor is rebased, persisted and shown on the row as such. If the price stayed put it is an
   accrual, recorded on the row, and the floor is left exactly where the user set it. Changes under
-  about 1% are accruals by construction. If no pre-change price is on record, a material change is
-  treated as a split, the dangerous case. Prices in this system are per displayed token: Jupiter's
+  about 1% are treated as accruals without consulting the price. That is an assumption about issuer
+  behaviour, not a law: it holds because no forward or reverse split is a fraction of a percent, and
+  it is thinnest for reverse splits, which are the closest thing to a small ratio that exists. If an
+  issuer ever did something in that range, the floor would stay put rather than move, which errs
+  toward keeping the position. If no pre-change price is on record, a material change is treated as
+  a split, again erring toward keeping the position rather than selling it. Prices in this system are per displayed token: Jupiter's
   price equals the raw-unit market price divided by the effective multiplier, verified against
   two-way swap quotes that settle in raw units. The keeper reads the *effective* multiplier from
   the raw extension bytes (a pending multiplier with a past effective timestamp), not the parser's
