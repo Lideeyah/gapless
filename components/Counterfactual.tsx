@@ -19,7 +19,11 @@ export default function Counterfactual({ stats, gap }: { stats: Stats | null; ga
             <Figure label={`first reading after reopen · ${fmtTs(gap.reopenAt)} · ${fmtPct(gap.movePct)}`} value={fmtUsd(gap.reopenPrice)} />
           </div>
           <p className="secondary" style={{ paddingTop: 24 }}>
-            Every price between the close and the reopen was tradable on Solana and untradable on the exchange. A floor between {fmtUsd(gap.closePrice)} and {fmtUsd(gap.extremePrice)} would have been reachable during closed hours, at the regime’s confirmation and slippage rules.
+            {gap.extremePrice < gap.closePrice
+              ? <>Every price between the close and the reopen was tradable on Solana and untradable on the exchange. A floor between {fmtUsd(gap.closePrice)} and {fmtUsd(gap.extremePrice)} would have been reachable during closed hours, at the regime’s confirmation and slippage rules.</>
+              : gap.lowPrice < gap.closePrice
+                ? <>This closure ended higher than it began; its low was {fmtUsd(gap.lowPrice)} at {fmtTs(gap.lowAt)}, {fmtPct(gap.lowPct)} from the close. A floor between {fmtUsd(gap.lowPrice)} and {fmtUsd(gap.closePrice)} would have filled during the closure and missed the reopen at {fmtUsd(gap.reopenPrice)}. Insurance has a premium.</>
+                : <>This closure never traded below its close. A floor would not have triggered.</>}
           </p>
         </div>
       ) : (

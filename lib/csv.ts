@@ -50,7 +50,7 @@ export function closures(rows: Reading[]): Closure[] {
   return out;
 }
 
-export type Gap = { ticker: string; closeAt: string; closePrice: number; extremeAt: string; extremePrice: number; reopenAt: string; reopenPrice: number; movePct: number; extremePct: number; session: Session };
+export type Gap = { ticker: string; closeAt: string; closePrice: number; extremeAt: string; extremePrice: number; reopenAt: string; reopenPrice: number; movePct: number; extremePct: number; session: Session; lowAt: string; lowPrice: number; lowPct: number };
 
 /** Largest gap across full closures: last open reading before, extreme during, first open reading after. */
 export function largestGap(rows: Reading[]): Gap | null {
@@ -63,8 +63,10 @@ export function largestGap(rows: Reading[]): Gap | null {
       const during = tr.filter((r) => r.ms >= c.startMs && r.ms <= c.endMs);
       if (!before || !after || during.length === 0) continue;
       const extreme = during.reduce((m, r) => (Math.abs(r.price! - before.price!) > Math.abs(m.price! - before.price!) ? r : m), during[0]);
+      const low = during.reduce((m, r) => (r.price! < m.price! ? r : m), during[0]);
       const g: Gap = { ticker, closeAt: before.t, closePrice: before.price!, extremeAt: extreme.t, extremePrice: extreme.price!, reopenAt: after.t, reopenPrice: after.price!,
-        movePct: ((after.price! - before.price!) / before.price!) * 100, extremePct: ((extreme.price! - before.price!) / before.price!) * 100, session: c.session };
+        movePct: ((after.price! - before.price!) / before.price!) * 100, extremePct: ((extreme.price! - before.price!) / before.price!) * 100, session: c.session,
+        lowAt: low.t, lowPrice: low.price!, lowPct: ((low.price! - before.price!) / before.price!) * 100 };
       if (!best || Math.abs(g.movePct) > Math.abs(best.movePct)) best = g;
     }
   }

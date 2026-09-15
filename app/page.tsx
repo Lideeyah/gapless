@@ -74,7 +74,9 @@ export default async function Landing() {
               <div style={{ height: 24 }} />
               {example
                 ? <p className="body">A floor set at {fmtUsd(example.floor)} would have filled at {fmtUsd(example.price)} during the closure, at the reading of {fmtTs(example.at)}. It opened at {fmtUsd(gap.reopenPrice)}.</p>
-                : <p className="body">This closure moved up, not down. A floor would not have triggered; the exposure ran the other way. It opened at {fmtUsd(gap.reopenPrice)}.</p>}
+                : gap.lowPrice < gap.closePrice
+                  ? <p className="body">This closure ended higher than it began. Its low was {fmtUsd(gap.lowPrice)} at {fmtTs(gap.lowAt)}, {fmtPct(gap.lowPct)} from the close. A floor set between {fmtUsd(gap.lowPrice)} and {fmtUsd(gap.closePrice)} would have filled there, during the closure, and missed the reopen at {fmtUsd(gap.reopenPrice)}. That is the premium on the insurance, and it is the same mechanism.</p>
+                  : <p className="body">This closure never traded below its close. A floor would not have triggered. It opened at {fmtUsd(gap.reopenPrice)}.</p>}
               <div style={{ height: 24 }} />
               <p className="mono secondary">
                 {commit ? <><a href={commit}>commit that wrote the {fmtTs(gap.extremeAt)} reading</a> · </> : null}
