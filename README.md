@@ -286,7 +286,14 @@ hole is real and stays visible in the data.
 - Jupiter price endpoint and response: reused from the recorder (`recorder.PRICE_URL`).
 - Jupiter routing at sub-dollar size: `GET /swap/v2/build` returned routes for roughly one dollar in
   both directions on all three mints (USDC to and from NVDAx, TSLAx, SPYx) with price impact below
-  0.05%. A funded round trip is the owner's to run with the keeper key.
+  0.05%.
+- A real fill, end to end, on 2026-09-15: a floor of 215.00 armed on 0.00990921 NVDAx at 20:2x UTC in
+  the `overnight` regime; the keeper counted breach 1/2 at 20:35:01 UTC (212.04) and executed at
+  20:40:01 UTC, selling 989,239 raw units for 2.103427 USDC delivered to the owner's wallet, fill
+  price 212.269707 per displayed token, signature
+  `2ogwEBppzC1ZA49yJEixPV5fbVhKJ8aQCkcq1uXtaWftMXsNzmhnNjugPVrP129XnppufjG1NZvr5rVTnsYHTs7y`. The
+  keeper was the only signer, ended the transaction holding no NVDAx and no USDC, and the owner's
+  delegation was consumed to zero.
 
 ## Deliberately out of scope for v1
 
