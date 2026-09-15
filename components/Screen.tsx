@@ -125,24 +125,41 @@ export default function Screen() {
     return parts.join(" · ") || String(e);
   }
 
+  /** Wait for a signature over plain HTTP (the relay has no WebSocket): status polling, bounded by the blockhash's validity. */
+  async function awaitConfirmed(sig: string, lastValidBlockHeight: number) {
+    for (;;) {
+      const st = (await connection.getSignatureStatuses([sig])).value[0];
+      if (st?.err) throw new Error(`transaction ${short(sig)} failed on chain: ${JSON.stringify(st.err)}`);
+      if (st && (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized")) return;
+      const height = await connection.getBlockHeight("confirmed");
+      if (height > lastValidBlockHeight) {
+        const again = (await connection.getSignatureStatuses([sig], { searchTransactionHistory: true })).value[0];
+        if (again && !again.err) return;
+        throw new Error(`transaction ${short(sig)} expired before it confirmed; nothing was changed, try again`);
+      }
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+
   async function confirmWith(tx: Transaction, step: string) {
     setPhase((p) => ({ ...(p as Phase), state: "inflight", step }));
-    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-    tx.recentBlockhash = blockhash; tx.feePayer = publicKey!;
-    let sig: string;
-    try {
-      sig = await sendTransaction(tx, connection);
-    } catch (e) {
-      // Phantom's own send path failed. Ask it only to sign, then submit through the app's RPC relay ourselves.
-      console.error("wallet sendTransaction failed", e);
-      if (!signTransaction) throw new Error(describe(e));
-      setPhase((p) => ({ ...(p as Phase), state: "inflight", step: `${step} · retrying as sign-then-submit` }));
+    tx.feePayer = publicKey!;
+    let sig: string; let lastValidBlockHeight: number;
+    if (signTransaction) {
+      // Primary path: Phantom signs, the app submits through its own relay. A fresh blockhash is taken right before signing.
+      const bh = await connection.getLatestBlockhash("confirmed");
+      tx.recentBlockhash = bh.blockhash; lastValidBlockHeight = bh.lastValidBlockHeight;
       let signed: Transaction;
-      try { signed = await signTransaction(tx); } catch (e2) { throw new Error(`sign failed: ${describe(e2)} (send failed first: ${describe(e)})`); }
+      try { signed = await signTransaction(tx); } catch (e) { throw new Error(`signing was rejected or failed: ${describe(e)}`); }
       try { sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false, preflightCommitment: "confirmed", maxRetries: 3 }); }
-      catch (e3) { throw new Error(`submit failed: ${describe(e3)} (Phantom send failed first: ${describe(e)})`); }
+      catch (e) { throw new Error(`submit failed: ${describe(e)}`); }
+    } else {
+      const bh = await connection.getLatestBlockhash("confirmed");
+      tx.recentBlockhash = bh.blockhash; lastValidBlockHeight = bh.lastValidBlockHeight;
+      try { sig = await sendTransaction(tx, connection); } catch (e) { throw new Error(describe(e)); }
     }
-    await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
+    setPhase((p) => ({ ...(p as Phase), state: "inflight", step: `${step} · sent ${short(sig)}, waiting for confirmation` }));
+    await awaitConfirmed(sig, lastValidBlockHeight);
     return sig;
   }
 
