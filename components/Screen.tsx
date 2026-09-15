@@ -31,7 +31,7 @@ type Phase = { kind: "set" | "revoke"; state: "confirm" | "inflight" | "done" | 
 
 export default function Screen() {
   const { connection } = useConnection();
-  const { publicKey, connected, connecting, wallets, wallet, select, connect, disconnect, sendTransaction } = useWallet();
+  const { publicKey, connected, connecting, wallets, wallet, select, connect, disconnect, sendTransaction, signTransaction } = useWallet();
   // Local inspection only: ?as=<pubkey> shows that owner's rows read-only, without a wallet. Never active in production builds.
   const [devAs, setDevAs] = useState<string | null>(null);
   useEffect(() => { if (process.env.NODE_ENV !== "production") setDevAs(new URLSearchParams(window.location.search).get("as")); }, []);
@@ -119,11 +119,29 @@ export default function Screen() {
   const canSet = setLabel === null || (setLabel?.startsWith("floor is at or above") ?? false);
   const floorStr = floorText.replace(/\.$/, "");
 
+  function describe(e: unknown): string {
+    const err = e as { name?: string; message?: string; error?: { message?: string }; cause?: { message?: string }; logs?: string[] };
+    const parts = [err?.name, err?.message, err?.error?.message, err?.cause?.message, err?.logs?.slice(-2).join(" / ")].filter(Boolean);
+    return parts.join(" · ") || String(e);
+  }
+
   async function confirmWith(tx: Transaction, step: string) {
     setPhase((p) => ({ ...(p as Phase), state: "inflight", step }));
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
     tx.recentBlockhash = blockhash; tx.feePayer = publicKey!;
-    const sig = await sendTransaction(tx, connection);
+    let sig: string;
+    try {
+      sig = await sendTransaction(tx, connection);
+    } catch (e) {
+      // Phantom's own send path failed. Ask it only to sign, then submit through the app's RPC relay ourselves.
+      console.error("wallet sendTransaction failed", e);
+      if (!signTransaction) throw new Error(describe(e));
+      setPhase((p) => ({ ...(p as Phase), state: "inflight", step: `${step} · retrying as sign-then-submit` }));
+      let signed: Transaction;
+      try { signed = await signTransaction(tx); } catch (e2) { throw new Error(`sign failed: ${describe(e2)} (send failed first: ${describe(e)})`); }
+      try { sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false, preflightCommitment: "confirmed", maxRetries: 3 }); }
+      catch (e3) { throw new Error(`submit failed: ${describe(e3)} (Phantom send failed first: ${describe(e)})`); }
+    }
     await connection.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, "confirmed");
     return sig;
   }
@@ -146,7 +164,7 @@ export default function Screen() {
       if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
       setPhase({ kind: "set", state: "done", detail: `armed at ${fmtUsd(Number(floorStr))}`, sigs: [approveSig, orderSig] });
       setFloorText(""); await Promise.all([loadOrders(), loadHoldings()]);
-    } catch (e) { setPhase({ kind: "set", state: "error", detail: (e as Error).message }); }
+    } catch (e) { console.error(e); setPhase({ kind: "set", state: "error", detail: describe(e) }); }
   }
 
   async function doRevoke(o: Order) {
@@ -159,7 +177,7 @@ export default function Screen() {
       if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
       setPhase({ kind: "revoke", state: "done", detail: `${o.ticker} floor removed`, sigs: [sig] });
       await Promise.all([loadOrders(), loadHoldings()]);
-    } catch (e) { setPhase({ kind: "revoke", state: "error", detail: (e as Error).message }); }
+    } catch (e) { console.error(e); setPhase({ kind: "revoke", state: "error", detail: describe(e) }); }
   }
 
   const confirmingRevoke = phase?.kind === "revoke" && phase.state === "confirm";
