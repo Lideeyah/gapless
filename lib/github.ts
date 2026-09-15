@@ -10,7 +10,10 @@ export type Order = {
   // additional, needed by this implementation
   order_sig: string; delegate: string; remaining_raw: string; fills: Fill[]; last_decision: string | null; last_session: string | null;
   last_price_usd: string | null; pending_sig: string | null; pending_amount_raw: string | null; pending_since: string | null; revoke_sig: string | null;
+  // mint state guard
+  multiplier: string | null; rebases: Rebase[]; blocked: "paused" | "transfer_hook" | "mint_unreadable" | null;
 };
+export type Rebase = { at: string; old_floor: string; new_floor: string; old_multiplier: string; new_multiplier: string };
 type Store = { orders: Order[] };
 
 const REPO = process.env.GITHUB_REPO ?? "Lideeyah/gapless";
@@ -25,6 +28,10 @@ function headers() {
 export function storeConfigured() { return Boolean(process.env.GITHUB_TOKEN); }
 
 export async function readOrders(): Promise<{ store: Store; sha: string | null }> {
+  if (process.env.NODE_ENV !== "production" && process.env.ORDERS_LOCAL_FILE) { // local inspection only
+    const { readFileSync } = await import("fs");
+    return { store: JSON.parse(readFileSync(process.env.ORDERS_LOCAL_FILE, "utf8")) as Store, sha: null };
+  }
   const res = await fetch(`${API}?ref=main`, { headers: headers(), cache: "no-store" });
   if (!res.ok) throw new Error(`orders.json read failed: HTTP ${res.status}`);
   const meta = await res.json();

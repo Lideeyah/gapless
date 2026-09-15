@@ -179,6 +179,83 @@ def delegation_on_chain(token_account):
     return p.get("delegate"), int((p.get("delegatedAmount") or {}).get("amount") or 0)
 
 
+# ---------------------------------------------------------------- Token-2022 mint state (pre-trade guard)
+# Decoded from the raw mint account bytes, not from a parser we do not control. Layout (spl-token-2022):
+# mint base 82 bytes, padding to 165, account type byte at 165, then TLV entries of (type u16, len u16, data).
+EXT_PERMANENT_DELEGATE, EXT_TRANSFER_HOOK, EXT_SCALED_UI, EXT_PAUSABLE = 12, 14, 25, 26
+_mint_state_cache = {}  # per keeper cycle only; main() starts with an empty cache
+
+
+def decode_mint_state(raw, now_ts):
+    """Return the parts of a Token-2022 mint that can invalidate a trade."""
+    st = {"multiplier": "1", "paused": False, "hook_program": None, "permanent_delegate": None, "extensions": []}
+    i = 166
+    while i + 4 <= len(raw):
+        t, n = int.from_bytes(raw[i:i + 2], "little"), int.from_bytes(raw[i + 2:i + 4], "little")
+        i += 4
+        if t == 0:
+            break
+        body = raw[i:i + n]
+        i += n
+        st["extensions"].append(t)
+        if t == EXT_SCALED_UI and n >= 56:  # authority 32, multiplier f64, new_multiplier_effective_timestamp i64, new_multiplier f64
+            import struct
+            mult, eff_ts, new_mult = struct.unpack_from("<dqd", body, 32)
+            st["multiplier"] = repr(new_mult if eff_ts and now_ts >= eff_ts else mult)
+            st["scaled_ui"] = {"multiplier": repr(mult), "new_multiplier": repr(new_mult), "new_multiplier_effective_at": eff_ts}
+        elif t == EXT_PAUSABLE and n >= 33:  # authority 32, paused u8
+            st["paused"] = body[32] != 0
+        elif t == EXT_TRANSFER_HOOK and n >= 64:  # authority 32, program_id 32 (all zero = no hook)
+            prog = body[32:64]
+            st["hook_program"] = None if prog == bytes(32) else str(Pubkey(prog))
+        elif t == EXT_PERMANENT_DELEGATE and n >= 32:
+            st["permanent_delegate"] = str(Pubkey(body[:32]))
+    return st
+
+
+def mint_state(mint):
+    """Current mint state from the same RPC the keeper uses. Cached only within this cycle. Raises on any failure."""
+    if mint in _mint_state_cache:
+        return _mint_state_cache[mint]
+    info = rpc("getAccountInfo", [mint, {"encoding": "base64", "commitment": "confirmed"}])["value"]
+    if not info or info.get("owner") != str(TOKEN_2022):
+        raise RuntimeError(f"mint {mint} is not a Token-2022 mint account")
+    st = decode_mint_state(base64.b64decode(info["data"][0]), int(time.time()))
+    _mint_state_cache[mint] = st
+    return st
+
+
+def guard_mint(o, tag):
+    """Pre-trade mint guard. Returns None if trading may be evaluated, else the decision string.
+    Order of checks: state readable -> multiplier unchanged (else rebase and skip) -> not paused -> no transfer hook."""
+    try:
+        st = mint_state(o["mint"])
+    except Exception as exc:  # noqa: BLE001
+        o["blocked"] = "mint_unreadable"
+        return f"mint state unreadable ({exc}); nothing evaluated, nothing fired"
+    stored = o.get("multiplier")
+    if stored is None:  # orders armed before the guard existed: adopt the current multiplier without rebasing
+        o["multiplier"] = st["multiplier"]
+    elif Decimal(stored) != Decimal(st["multiplier"]):
+        old_floor = Decimal(o["floor_price_usd"])
+        new_floor = (old_floor * Decimal(stored) / Decimal(st["multiplier"])).quantize(Decimal("0.000001"))
+        o.setdefault("rebases", []).append({"at": now_iso(), "old_floor": str(old_floor), "new_floor": str(new_floor),
+                                            "old_multiplier": stored, "new_multiplier": st["multiplier"]})
+        o["floor_price_usd"], o["multiplier"], o["breach_count"] = str(new_floor), st["multiplier"], 0
+        if o["status"] == "triggered":
+            o["status"] = "armed"  # a trigger counted against the old floor means nothing against the new one
+        o["blocked"] = None
+        return f"rebased: multiplier {stored} -> {st['multiplier']}, floor {old_floor} -> {new_floor}; breach count reset; not evaluated this cycle"
+    if st["paused"]:
+        o["blocked"] = "paused"
+        return "mint is paused by the issuer; no route requested, nothing sold"
+    if st["hook_program"]:
+        o["blocked"] = "transfer_hook"
+        return f"transfer hook {st['hook_program']} is enabled on the mint; swap not attempted"
+    o["blocked"] = None
+    return None
+
+
 def jup_build(input_mint, amount, taker, slippage_bps, dest_usdc_ata):
     q = urllib.parse.urlencode({"inputMint": str(input_mint), "outputMint": str(USDC), "amount": str(amount), "taker": str(taker),
                                 "slippageBps": str(slippage_bps), "destinationTokenAccount": str(dest_usdc_ata)})
@@ -307,6 +384,7 @@ def recover_executing(o, prices, session):
 
 
 def run():
+    _mint_state_cache.clear()  # mint state is never carried across cycles
     session = FORCE_SESSION or session_state(datetime.now(timezone.utc))
     rules = REGIMES[session]
     store, sha = load_orders()
@@ -337,6 +415,11 @@ def run():
                 continue
             if o["status"] == "failed":
                 o["status"] = "armed"  # retry path
+            blocked = guard_mint(o, tag)
+            if blocked:
+                o["last_decision"] = blocked
+                log(f"{tag} {o['last_decision']}")
+                continue
             if o["mint"] not in prices:
                 o["last_decision"] = "no price from Jupiter this run; breach count unchanged"
                 log(f"{tag} {o['last_decision']}")
@@ -368,6 +451,10 @@ def run():
                 o["last_decision"] = "triggered but KEEPER_SECRET_KEY is not configured; cannot execute"
                 log(f"{tag} {o['last_decision']}")
                 continue
+            if o.get("blocked"):
+                o["last_decision"] = f"not executed: {o['blocked']}"
+                log(f"{tag} {o['last_decision']}")
+                continue
             delegate, delegated = delegation_on_chain(o["token_account"])
             if delegate != str(keeper.pubkey()) or delegated < int(o["remaining_raw"]):
                 o["status"], o["last_decision"] = "revoked", f"delegation no longer on chain (delegate={delegate}, delegated={delegated}); order closed"
@@ -384,7 +471,7 @@ def run():
             log(f"{tag} {o['last_decision']}")
             send_and_confirm(raw, sig)
             out = usdc_received(sig, Pubkey.from_string(o["owner_pubkey"]))
-            record_fill(o, sig, amount, out if out is not None else 0, prices[o["mint"]][1], session)
+            record_fill(o, sig, amount, out if out is not None else 0, Decimal(mint_state(o["mint"])["multiplier"]), session)
             o["last_decision"] = f"{o['status']}: {amount} raw sold at {o['fill_price_usd']} USDC, signature {sig}"
             log(f"{tag} {o['last_decision']}")
         except Exception as exc:  # noqa: BLE001  an execution failure returns the order to the retry path

@@ -25,7 +25,7 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minRead
     if (floor !== null && Number.isFinite(floor)) { lo = Math.min(lo, floor); hi = Math.max(hi, floor); }
     if (!Number.isFinite(lo) || !Number.isFinite(hi)) { lo = 0; hi = 1; }
     const pad = Math.max((hi - lo) * 0.15, hi * 0.002);
-    lo -= pad; hi += pad;
+    lo = Math.max(0, lo - pad); hi += pad; // a price axis never goes below zero
     const y = (p: number) => top + (1 - (p - lo) / (hi - lo)) * (h - top - bottom);
     // session bands from distinct timestamps, in order
     const stamps = [...new Map(rows.map((r) => [Date.parse(r.t), r.session])).entries()].sort((a, b) => a[0] - b[0]);

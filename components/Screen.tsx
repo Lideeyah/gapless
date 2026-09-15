@@ -32,7 +32,12 @@ type Phase = { kind: "set" | "revoke"; state: "confirm" | "inflight" | "done" | 
 export default function Screen() {
   const { connection } = useConnection();
   const { publicKey, connected, connecting, wallets, wallet, select, connect, disconnect, sendTransaction } = useWallet();
-  const owner = publicKey?.toBase58() ?? null;
+  // Local inspection only: ?as=<pubkey> shows that owner's rows read-only, without a wallet. Never active in production builds.
+  const [devAs, setDevAs] = useState<string | null>(null);
+  useEffect(() => { if (process.env.NODE_ENV !== "production") setDevAs(new URLSearchParams(window.location.search).get("as")); }, []);
+  const viewKey = useMemo(() => { try { return devAs ? new PublicKey(devAs) : publicKey; } catch { return publicKey; } }, [devAs, publicKey]);
+  const owner = viewKey?.toBase58() ?? null;
+  const isConnected = connected || Boolean(devAs);
 
   const [history, setHistory] = useState<History | null>(null);
   const [histErr, setHistErr] = useState<string | null>(null);
@@ -58,9 +63,9 @@ export default function Screen() {
     catch { /* keep last known */ }
   }, [owner]);
   const loadHoldings = useCallback(async () => {
-    if (!publicKey) { setHoldings(null); return; }
+    if (!viewKey) { setHoldings(null); return; }
     try {
-      const accts = await connection.getParsedTokenAccountsByOwner(publicKey, { programId: TOKEN_2022_PROGRAM_ID });
+      const accts = await connection.getParsedTokenAccountsByOwner(viewKey, { programId: TOKEN_2022_PROGRAM_ID });
       const owned = accts.value.map((a) => ({ acct: a.pubkey.toBase58(), info: a.account.data.parsed.info })).filter((a) => BigInt(a.info.tokenAmount.amount) > 0n);
       const mints = owned.map((a) => a.info.mint as string);
       if (mints.length === 0) { setHoldings([]); setHoldErr(null); return; }
@@ -68,17 +73,19 @@ export default function Screen() {
         fetch(`/api/tokens?mints=${mints.join(",")}`, { cache: "no-store" }).then((r) => r.json()),
         fetch(`/api/prices?mints=${mints.join(",")}`, { cache: "no-store" }).then((r) => r.json()),
       ]);
+      const mintStates: Record<string, { multiplier: string }> = {};
+      await Promise.all((tokens as { mint: string }[]).map?.((t) => fetch(`/api/mint?mint=${t.mint}`, { cache: "no-store" }).then((r) => r.json()).then((m) => { if (m.multiplier) mintStates[t.mint] = m; })) ?? []);
       if (tokens.error) throw new Error(tokens.error);
       const list: Holding[] = [];
       for (const t of tokens as { mint: string; symbol: string; name: string; decimals: number }[]) {
         const a = owned.find((o) => o.info.mint === t.mint)!;
         list.push({ mint: t.mint, ticker: t.symbol, name: t.name, tokenAccount: a.acct, decimals: t.decimals, raw: a.info.tokenAmount.amount, ui: Number(a.info.tokenAmount.uiAmountString ?? 0),
-          uiString: String(a.info.tokenAmount.uiAmountString ?? "0"), delegate: a.info.delegate ?? null, delegatedRaw: a.info.delegatedAmount?.amount ?? "0", price: prices?.[t.mint]?.price ?? null, multiplier: String(prices?.[t.mint]?.multiplier ?? 1) });
+          uiString: String(a.info.tokenAmount.uiAmountString ?? "0"), delegate: a.info.delegate ?? null, delegatedRaw: a.info.delegatedAmount?.amount ?? "0", price: prices?.[t.mint]?.price ?? null, multiplier: mintStates[t.mint]?.multiplier ?? String(prices?.[t.mint]?.multiplier ?? 1) });
       }
       setHoldings(list); setHoldErr(null);
       if (list.length && !list.some((h) => h.ticker === sel)) setSel(list[0].ticker);
     } catch (e) { setHoldErr((e as Error).message); }
-  }, [connection, publicKey, sel]);
+  }, [connection, viewKey, sel]);
 
   useEffect(() => { loadHistory(); const id = setInterval(loadHistory, 120_000); return () => clearInterval(id); }, [loadHistory]);
   useEffect(() => { loadOrders(); loadHoldings(); const id = setInterval(() => { loadOrders(); loadHoldings(); }, 60_000); return () => clearInterval(id); }, [loadOrders, loadHoldings]);
@@ -166,7 +173,7 @@ export default function Screen() {
           <h2>A stop loss that works when the stock market is closed.</h2>
         </div>
         <div style={{ textAlign: "right" }}>
-          {connected && owner ? (
+          {isConnected && owner ? (
             <div><span className="mono">{short(owner)}</span><span className="faint"> · </span><button className="btn btn-secondary" onClick={() => disconnect()}>disconnect</button></div>
           ) : (
             <button className="btn btn-primary" onClick={onConnect} disabled={!mounted || connecting}>{connectLabel}</button>
@@ -188,9 +195,9 @@ export default function Screen() {
 
       <section>
         <div className="row head mono secondary"><span>ticker</span><span>quantity</span><span>current price</span><span>floor</span><span>status</span></div>
-        {!connected && <div className="row"><span className="secondary" style={{ gridColumn: "1 / -1" }}>Connect a wallet to see holdings. Balances are read from the chain; nothing is deposited.</span></div>}
-        {connected && holdErr && <div className="row"><span className="secondary" style={{ gridColumn: "1 / -1" }}>Could not read token accounts from the RPC: {holdErr}</span></div>}
-        {connected && holdings && holdings.length === 0 && live.length === 0 && fired.length === 0 && (
+        {!isConnected && <div className="row"><span className="secondary" style={{ gridColumn: "1 / -1" }}>Connect a wallet to see holdings. Balances are read from the chain; nothing is deposited.</span></div>}
+        {isConnected && holdErr && <div className="row"><span className="secondary" style={{ gridColumn: "1 / -1" }}>Could not read token accounts from the RPC: {holdErr}</span></div>}
+        {isConnected && holdings && holdings.length === 0 && live.length === 0 && fired.length === 0 && (
           <div className="row"><span className="secondary" style={{ gridColumn: "1 / -1" }}>This wallet holds no xStocks. Gapless works on Token-2022 xStock balances (NVDAx, TSLAx, SPYx and the rest of the xStocks list). Buy one on any Solana DEX and it will appear here.</span></div>
         )}
         {holdings?.map((h) => {
@@ -207,6 +214,10 @@ export default function Screen() {
                 {o ? (
                   <>
                     <span style={{ color: "rgba(31,77,61,.4)" }}>{o.status === "armed" && o.fills.length ? "armed · partially filled" : o.status}</span>{o.status === "failed" ? <span className="secondary"> · retrying next run</span> : null}
+                    {o.blocked === "paused" && <><br /><span>mint paused by the issuer</span><span className="secondary"> · the position cannot be sold while the pause lasts; the keeper checks again every cycle</span></>}
+                    {o.blocked === "transfer_hook" && <><br /><span>transfer hook enabled on the mint</span><span className="secondary"> · Gapless does not route swaps through hooks; the position will not be sold until this is reviewed</span></>}
+                    {o.blocked === "mint_unreadable" && <><br /><span>mint state unreadable</span><span className="secondary"> · the keeper will not sell until it can confirm the mint is unpaused and unsplit</span></>}
+                    {(o.rebases ?? []).map((r) => <span key={r.at}><br /><span className="mono secondary">floor rebased {fmtUsd(Number(r.old_floor))} → {fmtUsd(Number(r.new_floor))} on {fmtTs(r.at)} · issuer multiplier {r.old_multiplier} → {r.new_multiplier}</span></span>)}
                     <span className="secondary">{dist === null ? "" : ` · ${fmtPct(dist)} above floor`}</span>
                     <br /><span className="mono secondary">{onChainArmed ? `delegated ${h.delegatedRaw} raw on chain · ${o.breach_count} consecutive breach${o.breach_count === 1 ? "" : "es"}` : "delegation not visible on chain yet"}</span>
                     {o.last_decision ? <><br /><span className="mono secondary">{fmtTs(o.last_checked_at)} · {o.last_decision}</span></> : <><br /><span className="mono secondary">not yet checked by the keeper</span></>}
@@ -233,7 +244,7 @@ export default function Screen() {
             </div>
           );
         })}
-        {connected && live.filter((o) => !holdings?.some((h) => h.tokenAccount === o.token_account)).map((o) => (
+        {isConnected && live.filter((o) => !holdings?.some((h) => h.tokenAccount === o.token_account)).map((o) => (
           <div className="row" key={o.id}><span className="secondary" style={{ gridColumn: "1 / -1" }}>{o.ticker} order {short(o.id)} is armed but its token account no longer shows a balance in this wallet.</span></div>
         ))}
         <div className="rule" />
@@ -258,7 +269,7 @@ export default function Screen() {
           </div>
         ) : phase?.kind === "set" && phase.state === "confirm" && holding ? (
           <div className="fade">
-            <p>Arm a floor at <span className="num" style={{ fontSize: 22 }}>{fmtUsd(floor)}</span> on {qtyText} {sel}. Two signatures: an SPL approve delegating up to that quantity to the keeper, and a memo recording the order. Tokens stay in your wallet.</p>
+            <p>Arm a floor at <span className="num" style={{ fontSize: 22 }}>{fmtUsd(floor)}</span> on {qtyText} {sel}. Two signatures: an SPL approve delegating up to that quantity to the keeper, and a memo recording the order. Tokens stay in your wallet. Gapless holds a capped delegation you can revoke at any time. The issuer separately holds an uncapped permanent delegation over every account of this token, which Gapless neither controls nor can remove.</p>
             {regime && <p className="secondary" style={{ paddingTop: 24 }}>Right now the recorder’s last reading is in the {lastSession} regime: {regime.confirmations} consecutive reading{regime.confirmations === 1 ? "" : "s"} at or below the floor and {regime.slippageBps} bps slippage tolerance{regime.splitOnImpact ? ", split across runs if price impact exceeds it" : ""}.</p>}
             <p style={{ paddingTop: 24 }}><button className="btn btn-primary" onClick={doSet}>sign and arm</button> <span className="faint"> · </span> <button className="btn btn-secondary" onClick={() => setPhase(null)}>back</button></p>
           </div>

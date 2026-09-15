@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { readOrders, updateOrders, storeConfigured, type Order } from "@/lib/github";
 import { verifyApprove, verifyOrderMemo, KEEPER_PUBKEY } from "@/lib/chain";
+import { readMintState } from "@/lib/mint";
 
 export const dynamic = "force-dynamic";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -31,10 +32,13 @@ export async function POST(req: Request) {
     const bad = (await verifyApprove(b.delegation_sig!, b.owner_pubkey!, b.token_account!, b.quantity_raw!))
       ?? (await verifyOrderMemo(b.order_sig!, b.owner_pubkey!, { gapless: 1, id: b.id, mint: b.mint, token_account: b.token_account, quantity_raw: b.quantity_raw, floor_price_usd: b.floor_price_usd, delegate: KEEPER_PUBKEY, delegation_sig: b.delegation_sig }));
     if (bad) return NextResponse.json({ error: bad }, { status: 422 });
+    // The floor is meaningful only against the multiplier in force when it was chosen: read it from the mint now.
+    const mintNow = await readMintState(b.mint!);
     const now = new Date().toISOString().replace(/\.\d+Z$/, "Z");
     const order: Order = { id: b.id!, owner_pubkey: b.owner_pubkey!, mint: b.mint!, ticker: b.ticker!, token_account: b.token_account!, quantity_raw: b.quantity_raw!, decimals: Number(b.decimals),
       floor_price_usd: b.floor_price_usd!, status: "armed", breach_count: 0, last_checked_at: null, delegation_sig: b.delegation_sig!, fill_sig: null, fill_price_usd: null, filled_at: null, failure_reason: null, created_at: now,
-      order_sig: b.order_sig!, delegate: KEEPER_PUBKEY, remaining_raw: b.quantity_raw!, fills: [], last_decision: null, last_session: null, last_price_usd: null, pending_sig: null, pending_amount_raw: null, pending_since: null, revoke_sig: null };
+      order_sig: b.order_sig!, delegate: KEEPER_PUBKEY, remaining_raw: b.quantity_raw!, fills: [], last_decision: null, last_session: null, last_price_usd: null, pending_sig: null, pending_amount_raw: null, pending_since: null, revoke_sig: null,
+      multiplier: mintNow.multiplier, rebases: [], blocked: null };
     await updateOrders((s) => {
       if (s.orders.some((o) => o.id === order.id || o.order_sig === order.order_sig)) return "order already recorded";
       // One delegation, one order: a newer approve on the same token account supersedes any open order on it.

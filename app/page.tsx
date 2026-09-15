@@ -113,7 +113,11 @@ export default async function Landing() {
 
       <section className="pair">
         <p className="lede">Set a floor on a stock you own. If the price reaches it, Gapless sells, at any hour, including nights and weekends.</p>
-        <p className="body">Your tokens never leave your wallet. Gapless holds a revocable delegation on one token account, capped at one amount, and can only act when your condition is met.</p>
+        <div>
+          <p className="body">Your tokens never leave your wallet. Gapless holds a revocable delegation on one token account, capped at one amount, and can only act when your condition is met.</p>
+          <div style={{ height: 24 }} />
+          <p className="body">That is the whole of what Gapless holds, and you can revoke it at any time. It is not the whole picture. xStocks are issued with a permanent delegate: the issuer can transfer or burn these tokens from any wallet without the holder&rsquo;s permission. Gapless does not control that delegation and cannot remove it.</p>
+        </div>
       </section>
 
       <div style={{ height: 72 }} />

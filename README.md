@@ -74,10 +74,16 @@ revoked or exhausted. Nothing else: not other mints, not other accounts, not amo
 **What it does not grant, stated plainly.** SPL delegation does not enforce the price condition.
 The token program has no concept of a floor. The condition is enforced by the keeper's logic, so a
 compromised keeper key could sell a delegated position at a price the user did not authorise, capped
-at the delegated amount, on the delegated account only. **This system is not trust-minimised.** The
-honest claim is that the blast radius is capped by the delegation and the user can revoke at any
-time, with one `revoke` instruction, independent of Gapless being online. The revoke control sits on
-the same screen as the order.
+at the delegated amount, on the delegated account only. **This system relies on the keeper's honesty
+for the price condition.** The honest claim is that the blast radius is capped by the delegation and
+the user can revoke at any time, with one `revoke` instruction, independent of Gapless being online.
+The revoke control sits on the same screen as the order.
+
+**What Gapless does not control.** xStocks mints carry a Token-2022 permanent delegate held by the
+issuer (`5aMNNLQJwAEeoemTEMkv5NVjqKwvvefRYCQ5Z67HFvEq` on all three tracked mints). That authority can
+transfer or burn tokens from any holder's account without the holder's permission. It is uncapped,
+it predates any Gapless delegation, and Gapless can neither control it nor remove it. The app says
+so wherever it explains custody.
 
 **On-chain, verifiable:** the approve, the revoke, the memo (its signature is stored with the order;
 the order id is a uuid embedded in the memo), and execution as one atomic transaction: delegated
@@ -106,6 +112,34 @@ mid-execution is recoverable: the next run finds `executing`, looks the pending 
 chain, and records the fill if it landed, or marks it failed if it cannot land any more. It never
 decides from memory. All token amounts in the order record are raw integer strings; no floating
 point arithmetic touches an amount anywhere in the system.
+
+## Pre-trade mint state guard
+
+xStocks are Token-2022 mints, not plain SPL tokens. Decoded from the raw mint accounts on
+2026-09-15, all three tracked mints carry exactly these extensions: MetadataPointer, PermanentDelegate,
+DefaultAccountState (initialized), ScaledUiAmount, Pausable, ConfidentialTransferMint (not
+auto-approving), TransferHook (no program set), TokenMetadata. Two of them can turn a routine
+corporate action into a catastrophic sale if ignored.
+
+- **Scaled UI amount.** The issuer publishes a multiplier for splits and stock dividends. A 10-for-1
+  split makes the price per token fall by ten times while the holder's unit count rises by ten times.
+  A floor compared against that price would fire and sell the whole position at what looks like a
+  90% loss. So the multiplier in force when a floor is armed is stored with the order, and on every
+  cycle the keeper reads the mint's current multiplier before comparing anything. If it changed, the
+  floor is rebased by the ratio, the new floor and multiplier are persisted, a rebase event is
+  recorded on the order and shown on the row, the breach counter resets, and that cycle evaluates
+  nothing. The next cycle evaluates against the rebased floor. The keeper reads the *effective*
+  multiplier from the raw extension bytes (a pending multiplier with a past effective timestamp), not
+  the parser's "current" field, which on NVDAx and SPYx was stale when checked.
+- **Pausable.** If the mint is paused, no route is requested and nothing is sold. The refusal and the
+  reason are recorded on the order and shown as a distinct state.
+- **Transfer hook.** Currently no program is set. If one ever is, transfers need extra accounts the
+  keeper does not resolve, so it refuses to swap, records why, and shows it. Detecting and refusing
+  is the correct behaviour here; guessing is not.
+- **Unreadable state.** If the mint account cannot be read, the keeper fires nothing that cycle.
+
+All of these run before the impact check and before any route is requested. Mint state is read from
+the same RPC the keeper already uses and cached only within a single cycle.
 
 ## The keeper
 
