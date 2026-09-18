@@ -107,7 +107,7 @@ export function stats(allRows: Reading[]): Stats {
     }
     closedMove += cm; totalMove += tm;
     const priced = tr.filter((r) => r.price !== null);
-    const closedPriced = priced.filter((r) => r.session !== "open");
+    const closedPriced = priced.filter((r) => r.session === "overnight" || r.session === "weekend"); // NYSE closed hours only; a no-market asset has none
     perTicker[tk] = { readings: tr.length, last: priced.at(-1)?.price ?? null, lastAt: priced.at(-1)?.t ?? null,
       minClosed: closedPriced.length ? Math.min(...closedPriced.map((r) => r.price!)) : null,
       maxClosed: closedPriced.length ? Math.max(...closedPriced.map((r) => r.price!)) : null, closedMove: cm, totalMove: tm };
