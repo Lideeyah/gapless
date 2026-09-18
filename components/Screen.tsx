@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import pythCfg from "@/keeper/pyth.json";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { TOKEN_2022_PROGRAM_ID, createApproveCheckedInstruction, createRevokeInstruction } from "@solana/spl-token";
@@ -23,6 +24,7 @@ function rawFromUi(ui: string, decimals: number, multiplier: string): bigint {
   return (q * 10n ** BigInt(decimals) * ms) / (qs * m);
 }
 const MEMO_PROGRAM = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
+const WITNESS_FEEDS: Record<string, { equity: string; xstock: string }> = { NVDAx: { equity: "Equity.US.NVDA/USD", xstock: "Crypto.NVDAX/USD" }, TSLAx: { equity: "Equity.US.TSLA/USD", xstock: "Crypto.TSLAX/USD" }, SPYx: { equity: "Equity.US.SPY/USD", xstock: "Crypto.SPYX/USD" } };
 const RECORDED: Record<string, string> = { NVDAx: "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh", TSLAx: "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB", SPYx: "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W" };
 
 type History = { rows: Row[]; stats: Stats; gap: Gap | null; regimes: Record<string, { hours: string; confirmations: number; slippageBps: number; splitOnImpact: boolean }> };
@@ -110,6 +112,8 @@ export default function Screen() {
   const rows = history?.rows ?? [];
   const lastSession = history?.stats.currentSession ?? null;
   const regime = lastSession && history ? history.regimes[lastSession] : null;
+  const sessionSource = [...live, ...fired].map((o) => o.last_session_source).find((x) => x) ?? null;
+  const witnessTickers = Object.entries(WITNESS_FEEDS).filter(([, f]) => pythCfg.entitled.includes(f.equity) || pythCfg.entitled.includes(f.xstock)).map(([t]) => t);
 
   useEffect(() => { if (holding && !qtyText) setQtyText(holding.uiString); }, [holding, qtyText]);
 
@@ -253,6 +257,9 @@ export default function Screen() {
                     {o.blocked === "transfer_hook" && <><br /><span>transfer hook enabled on the mint</span><span className="secondary"> · Gapless does not route swaps through hooks; the position will not be sold until this is reviewed</span></>}
                     {o.blocked === "no_balance" && <><br /><span>nothing left to sell</span><span className="secondary"> · the token account balance is zero; the delegation is still armed and the keeper will sell whatever returns to it</span></>}
                     {o.blocked === "mint_unreadable" && <><br /><span>mint state unreadable</span><span className="secondary"> · the keeper will not sell until it can confirm the mint is unpaused and unsplit</span></>}
+                    {o.blocked === "pyth_divergence" && o.pyth_check && <><br /><span>held by the second witness</span><span className="secondary"> · Pyth {o.pyth_check.reference} read {fmtUsd(Number(o.pyth_check.pyth_price_usd))} against an execution price of {fmtUsd(Number(o.pyth_check.exec_price_usd))}, {o.pyth_check.divergence_bps} bps apart at {fmtTs(o.pyth_check.checked_at)}; nothing is sold until the two agree within {pythCfg.max_divergence_bps} bps</span></>}
+                    {o.blocked === "pyth_unavailable" && o.pyth_check && <><br /><span>held by the second witness</span><span className="secondary"> · Pyth {o.pyth_check.reference ?? "feed"} was {o.pyth_check.status === "stale" ? `${o.pyth_check.age_s}s old` : "unreadable"} at {fmtTs(o.pyth_check.checked_at)} while the market was open; unknown is not agreement, the keeper retries next cycle</span></>}
+                    {!o.blocked && o.pyth_check && (o.status === "triggered" || o.status === "executing") && <><br /><span className="mono secondary">second witness {o.pyth_check.status === "agree" ? `agreed: Pyth ${o.pyth_check.reference} ${fmtUsd(Number(o.pyth_check.pyth_price_usd))}, ${o.pyth_check.divergence_bps} bps from the execution price` : o.pyth_check.status === "market_closed" ? `not consulted: Pyth ${o.pyth_check.reference} is frozen while the NYSE is shut` : o.pyth_check.status === "not_entitled" ? "not consulted: no Pyth entitlement for this asset" : o.pyth_check.status} · {fmtTs(o.pyth_check.checked_at)}</span></>}
                     {o.multiplier_event && <><br /><span className="mono secondary">issuer multiplier changed {o.multiplier_event.old_multiplier} → {o.multiplier_event.new_multiplier} at {fmtTs(o.multiplier_event.detected_at)} · deciding split or dividend on the next reading; nothing evaluated until then</span></>}
                     {(o.rebases ?? []).map((r) => <span key={r.at}><br /><span className="mono secondary">{r.kind === "split"
                       ? `split: floor rebased ${fmtUsd(Number(r.old_floor))} → ${fmtUsd(Number(r.new_floor))} on ${fmtTs(r.at)} · issuer multiplier ${r.old_multiplier} → ${r.new_multiplier} · price moved ${r.pre_price_usd ? fmtUsd(Number(r.pre_price_usd)) : "—"} → ${fmtUsd(Number(r.post_price_usd))}`
@@ -328,6 +335,10 @@ export default function Screen() {
         <p className="mono faint" style={{ paddingTop: 24 }}>
           {regime && lastSession ? `regime now: ${lastSession} (${regime.hours}) as of the recorder’s reading at ${fmtTs(history?.stats.lastAt)} · ${regime.confirmations} confirmation${regime.confirmations === 1 ? "" : "s"} · ${regime.slippageBps} bps` : "regime: waiting for the recorder’s first reading"}
           {KEEPER ? ` · keeper delegate ${short(KEEPER)}` : " · keeper delegate not configured"}
+        </p>
+        <p className="mono faint" style={{ paddingTop: 8 }}>
+          {sessionSource === "pyth" ? "market hours: Pyth’s live market_hours flag decided the keeper’s last session; the hand calendar is the fallback" : sessionSource === "calendar" ? "market hours: Pyth’s flag was unreadable on the keeper’s last cycle; the hand calendar decided" : "market hours: from Pyth’s keyless market_hours flag once the keeper next runs; hand calendar as fallback"}
+          {` · second witness: Pyth ${pythCfg.entitled.join(", ")} on ${witnessTickers.join(", ")} only, demo-trial scoped, lapses ${pythCfg.trial_expires}; other assets and any lapse read not_entitled and never block`}
         </p>
       </section>
 

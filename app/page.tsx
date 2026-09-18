@@ -1,4 +1,7 @@
 import Timeline from "@/components/Timeline";
+import PythChart from "@/components/PythChart";
+import { fetchPythCsv, parsePythCsv, witness } from "@/lib/pyth";
+import pythCfg from "@/keeper/pyth.json";
 import { fetchCsv, parseCsv, stats, largestGap, floorExample, closureMoves } from "@/lib/csv";
 import { commitForReading, HISTORY_URL } from "@/lib/commits";
 import { fmtPct, fmtShare, fmtTs, fmtUsd } from "@/lib/format";
@@ -17,6 +20,11 @@ export default async function Landing() {
   const commit = gap ? await commitForReading(gap.extremeAt) : null;
   const ticker = gap?.ticker ?? (s.tickers.includes("NVDAx") ? "NVDAx" : s.tickers[0] ?? "NVDAx");
   const window = s.firstAt && s.lastAt ? `${fmtTs(s.firstAt)} to ${fmtTs(s.lastAt)}` : "no readings yet";
+  let pythRows: ReturnType<typeof parsePythCsv> = [];
+  let pythErr: string | null = null;
+  try { pythRows = parsePythCsv(await fetchPythCsv()); } catch (e) { pythErr = (e as Error).message; }
+  const wit = witness(pythRows, "TSLAx");
+  const witRows = pythRows.filter((r) => r.ticker === "TSLAx").map((r) => ({ t: r.t, jupiter: r.jupiter, equity: r.equity, marketOpen: r.marketOpen }));
 
   return (
     <main className="page">
@@ -107,6 +115,46 @@ export default async function Landing() {
           <span><span className="fig" style={{ fontSize: 28 }}>{fmtShare(s.closedShareOfReadings)}</span> <span className="secondary">of {s.rows} rows fell outside 09:30–16:00 ET, over {window}</span></span>
         </div>
         <p className="mono faint" style={{ paddingTop: 8 }}>recomputed from <a href={HISTORY_URL}>data/prices.csv</a> at {fmtTs(s.computedAt)} · nothing interpolated, holes stay holes</p>
+      </section>
+
+      <div style={{ height: 96 }} />
+      <div className="rule" />
+      <div style={{ height: 72 }} />
+
+      <section>
+        <p className="lede">A second witness, from outside.</p>
+        <div style={{ height: 24 }} />
+        <div className="pair">
+          <p className="body">The claim above rests on our own recorder. Pyth publishes a regular equity feed for the same underlying, and its keyless feed list says, per exchange, whether the market is open right now. The keeper takes its trading hours from that flag, holidays and half-days included, instead of a calendar typed in by hand.</p>
+          <p className="body">The ink line is Pyth&rsquo;s {wit.equityFeed || "Equity.US.TSLA/USD"}. The green line is our own TSLAx series. When the NYSE shuts, one of them stops.</p>
+        </div>
+        <div style={{ height: 48 }} />
+        {pythErr ? <p className="secondary">Could not read data/pyth.csv: {pythErr}</p> : (
+          <PythChart rows={witRows} ticker="TSLAx" equityFeed={wit.equityFeed} />
+        )}
+        <div style={{ height: 48 }} />
+        {wit.reopen ? (
+          <div className="pair">
+            <p className="body">Across the last complete closure Pyth&rsquo;s equity print moved {fmtPct(wit.reopen.equityGapPct)} between its last regular-hours print and its first after reopen, in one step. At that first reading our TSLAx price stood {fmtPct(wit.reopen.jupiterVsEquityPct)} from it.{wit.maxClosedDivergence ? ` The widest gap during the closure was ${fmtPct(wit.maxClosedDivergence.pct)}, at ${fmtTs(wit.maxClosedDivergence.at)}.` : ""}</p>
+            <div>
+              <div><div className="fig">{fmtUsd(wit.reopen.equityBefore)}</div><div className="mono secondary">Pyth, last regular-hours print before the closure</div></div>
+              <div style={{ height: 16 }} />
+              <div><div className="fig">{fmtUsd(wit.reopen.equityAfter)}</div><div className="mono secondary">Pyth, first print after reopen · {fmtPct(wit.reopen.equityGapPct)} · {fmtTs(wit.reopen.at)}</div></div>
+              <div style={{ height: 16 }} />
+              <div><div className="fig">{fmtUsd(wit.reopen.jupiterAfter)}</div><div className="mono secondary">TSLAx, our reading at the same stamp · {fmtPct(wit.reopen.jupiterVsEquityPct)} from Pyth</div></div>
+            </div>
+          </div>
+        ) : (
+          <div className="pair">
+            <p className="body">{wit.readings === 0 ? "No witness readings yet. The recorder writes data/pyth.csv alongside data/prices.csv once the branch carrying it runs." : `${wit.readings} witness readings exist, ${wit.equityReadings} with a Pyth price, ${wit.closedReadings} of them while Pyth's flag said the NYSE was shut. The first reopen figure needs a full closure with regular-hours readings on both sides.`}</p>
+            {wit.closedReadings > 0 && (
+              <p className="body">During closed hours so far Pyth&rsquo;s equity feed produced {wit.closedDistinctPrints} distinct print{wit.closedDistinctPrints === 1 ? "" : "s"} across {wit.closedReadings} readings{wit.maxClosedDivergence ? `, while our TSLAx line drifted as far as ${fmtPct(wit.maxClosedDivergence.pct)} from it at ${fmtTs(wit.maxClosedDivergence.at)}` : ""}.{wit.confOpenPct !== null && wit.confClosedPct !== null ? ` Its confidence band averaged ${wit.confOpenPct.toFixed(4)}% of price in regular hours and ${wit.confClosedPct.toFixed(4)}% outside them.` : ""}</p>
+            )}
+          </div>
+        )}
+        <p className="mono faint" style={{ paddingTop: 24 }}>
+          market hours: Pyth market_hours flag, keyless, all assets · price witness: {pythCfg.entitled.join(", ")} on the Pyth Terminal demo trial, TSLAx only, lapses {pythCfg.trial_expires}; after that the witness reads not_entitled and the keeper carries on without it · Pyth can refuse a sale, never cause one · recomputed from <a href={`${REPO_URL}/blob/main/data/pyth.csv`}>data/pyth.csv</a>
+        </p>
       </section>
 
       <div style={{ height: 96 }} />

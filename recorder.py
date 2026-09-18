@@ -11,6 +11,9 @@ import urllib.request
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pyth  # noqa: E402  second witness; writes data/pyth.csv, never touches prices.csv
+
 # Mint addresses verified on Solscan (Token-2022, 8 decimals) and via on-chain metadata.
 TICKERS = {
     "NVDAx": "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh",
@@ -25,6 +28,7 @@ CSV_PATH = os.environ.get(
     "GAPLESS_CSV",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "prices.csv"),
 )
+PYTH_CSV_PATH = os.environ.get("GAPLESS_PYTH_CSV", os.path.join(os.path.dirname(CSV_PATH), "pyth.csv"))
 EASTERN = ZoneInfo("America/New_York")
 
 
@@ -71,6 +75,23 @@ def main():
                    SOURCE if price is not None else "error"]
             writer.writerow(row)
             print(",".join(row))
+    record_pyth(timestamp, {t: prices.get(m) for t, m in TICKERS.items()})
+
+
+def record_pyth(timestamp, jupiter_by_ticker):
+    """Parallel file, same stamp, same cadence. Its failure is a gap in pyth.csv and nothing else."""
+    try:
+        rows = pyth.pyth_rows(timestamp, jupiter_by_ticker)
+        write_header = not os.path.exists(PYTH_CSV_PATH) or os.path.getsize(PYTH_CSV_PATH) == 0
+        with open(PYTH_CSV_PATH, "a", newline="") as f:
+            writer = csv.writer(f)
+            if write_header:
+                writer.writerow(pyth.PYTH_HEADER)
+            writer.writerows(rows)
+        for row in rows:
+            print("pyth " + ",".join(row))
+    except Exception as exc:  # noqa: BLE001
+        print(f"pyth recording failed: {exc!r}", file=sys.stderr)
 
 
 if __name__ == "__main__":

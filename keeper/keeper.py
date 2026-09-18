@@ -27,7 +27,8 @@ from decimal import Decimal, ROUND_DOWN
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from recorder import PRICE_URL, session_state  # noqa: E402  the one session-state implementation
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from market_calendar import execution_session  # noqa: E402  holidays and half-days, execution only
+from market_hours import execution_session_live  # noqa: E402  Pyth's live market flag; hand calendar as fallback
+import pyth  # noqa: E402  second price witness; refusal-only
 
 from solders.address_lookup_table_account import AddressLookupTableAccount  # noqa: E402
 from solders.hash import Hash  # noqa: E402
@@ -40,6 +41,9 @@ from solders.transaction import VersionedTransaction  # noqa: E402
 HERE = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(HERE, "regimes.json")) as _f:
     REGIMES = {k: v for k, v in json.load(_f).items() if not k.startswith("_")}
+
+with open(os.path.join(HERE, "pyth.json")) as _f:
+    PYTH_CFG = {k: v for k, v in json.load(_f).items() if not k.startswith("_")}
 
 RPC_URL = os.environ.get("RPC_URL") or "https://api.mainnet-beta.solana.com"
 REPO = os.environ.get("GITHUB_REPOSITORY", "Lideeyah/gapless")
@@ -321,6 +325,51 @@ def guard_mint(o, tag):
     return None
 
 
+def pyth_check(o, exec_price, session):
+    """Second witness, refusal-only. Runs after the mint guard and before any route is requested, on a triggered order.
+    Compares the price the keeper is about to act on with Pyth's reading for the same asset. Returns None to let
+    execution proceed, else the decision string; o["pyth_check"] records what was seen either way.
+
+    Reference: the xStock feed when entitled, else the equity feed. An equity feed is a like-for-like reference only
+    while it is fresh (Pyth publishes US equities through extended hours); a stale equity print outside NYSE hours is
+    the expected shape of a closed market, not a fault, and is recorded as `market_closed` without refusing.
+    Absent access (no key, expired key, no grant for the feed) never blocks: the audited price path must not depend
+    on a trial entitlement. Present access that fails (transport error, or stale while the market is open) refuses,
+    because unknown is not agreement. No branch here can start a trade; every branch can only stop one."""
+    feeds = pyth.FEEDS.get(o["ticker"])
+    rec = {"checked_at": now_iso(), "exec_price_usd": str(exec_price), "session": session}
+    if not feeds:
+        o["pyth_check"] = {**rec, "status": "no_feed"}
+        return None
+    readings = pyth.fetch_latest([feeds["xstock"][1], feeds["equity"][1]])
+    ref = next(((side, feeds[side][0], readings[feeds[side][1]]) for side in ("xstock", "equity") if readings[feeds[side][1]]["status"] == "ok"), None)
+    statuses = {side: readings[feeds[side][1]]["status"] for side in ("xstock", "equity")}
+    rec["feeds"] = statuses
+    if ref is None:
+        if all(st in ("not_entitled", "no_key", "key_rejected") for st in statuses.values()):
+            o["pyth_check"] = {**rec, "status": "not_entitled"}
+            return None  # no access is not a reading; it can neither agree nor disagree
+        o["blocked"], o["pyth_check"] = "pyth_unavailable", {**rec, "status": "unreadable", "errors": {s: readings[feeds[s][1]].get("error") for s in statuses}}
+        return "pyth feed unreadable; unknown is not agreement, not executing this cycle"
+    side, symbol, r = ref
+    age = int(time.time()) - r["publish_time"]
+    rec.update({"reference": symbol, "pyth_price_usd": repr(r["price"]), "pyth_conf_usd": repr(r["conf"]), "pyth_publish_utc": pyth.iso(r["publish_time"]), "age_s": age})
+    if age > PYTH_CFG["max_age_s"]:
+        if side == "equity" and session != "open":
+            o["pyth_check"] = {**rec, "status": "market_closed"}
+            return None  # the equity print is frozen because NYSE is shut; that is the thesis, not a fault
+        o["blocked"], o["pyth_check"] = "pyth_unavailable", {**rec, "status": "stale"}
+        return f"pyth {symbol} is {age}s old (max {PYTH_CFG['max_age_s']}s); unknown is not agreement, not executing this cycle"
+    div_bps = int(abs(Decimal(repr(r["price"])) - exec_price) / exec_price * 10_000)
+    rec["divergence_bps"] = div_bps
+    if div_bps > PYTH_CFG["max_divergence_bps"]:
+        o["blocked"], o["pyth_check"] = "pyth_divergence", {**rec, "status": "diverged"}
+        return (f"pyth {symbol} {r['price']:.4f} vs execution price {exec_price:.4f}: {div_bps} bps apart, over the {PYTH_CFG['max_divergence_bps']} bps band; "
+                f"not executing this cycle")
+    o["pyth_check"] = {**rec, "status": "agree"}
+    return None
+
+
 def jup_build(input_mint, amount, taker, slippage_bps, dest_usdc_ata):
     q = urllib.parse.urlencode({"inputMint": str(input_mint), "outputMint": str(USDC), "amount": str(amount), "taker": str(taker),
                                 "slippageBps": str(slippage_bps), "destinationTokenAccount": str(dest_usdc_ata)})
@@ -507,11 +556,14 @@ def run():
     _mint_state_cache.clear()  # mint state is never carried across cycles
     now_utc = datetime.now(timezone.utc)
     labelled = FORCE_SESSION or session_state(now_utc)
-    session = labelled if FORCE_SESSION else execution_session(now_utc, labelled)
+    if FORCE_SESSION:
+        session, session_source, session_note = labelled, "forced", "forced"
+    else:
+        session, session_source, session_note = execution_session_live(now_utc, labelled)
     rules = REGIMES[session]
     store, sha = load_orders()
     open_orders = [o for o in store["orders"] if o["status"] in OPEN]
-    log(f"run session={session}{' (forced)' if FORCE_SESSION else ''}{'' if session == labelled else f' (calendar; recorder labels {labelled})'} "
+    log(f"run session={session} ({session_source}: {session_note}){'' if session == labelled else f'; recorder labels {labelled}'} "
         f"confirmations={rules['confirmations']} slippage={rules['slippageBps']}bps split={rules['splitOnImpact']} open_orders={len(open_orders)} dry_run={DRY_RUN}")
     if not open_orders:
         log("nothing to check")
@@ -542,7 +594,7 @@ def run():
     # 3. evaluate every open order that was not settled or left executing above (a settled order waits for the next cycle)
     settled_ids = {x["id"] for x in touched}
     for o in [x for x in open_orders if x["id"] not in settled_ids and x["status"] not in TERMINAL]:
-        o["last_checked_at"], o["last_session"] = now, session
+        o["last_checked_at"], o["last_session"], o["last_session_source"] = now, session, session_source
         touched.append(o)
         tag = order_tag(o)
         try:
@@ -595,6 +647,11 @@ def run():
                 continue
             if o.get("blocked"):
                 o["last_decision"] = f"not executed: {o['blocked']}"
+                log(f"{tag} {o['last_decision']}")
+                continue
+            refused = pyth_check(o, Decimal(o["last_price_usd"]), session)
+            if refused:
+                o["last_decision"] = refused
                 log(f"{tag} {o['last_decision']}")
                 continue
             owner_on_chain, delegate, delegated, balance = token_account_state(o["token_account"])

@@ -11,9 +11,15 @@ export type Order = {
   order_sig: string; delegate: string; remaining_raw: string; fills: Fill[]; last_decision: string | null; last_session: string | null;
   last_price_usd: string | null; pending_sig: string | null; pending_amount_raw: string | null; pending_since: string | null; revoke_sig: string | null;
   // mint state guard
-  multiplier: string | null; rebases: Rebase[]; blocked: "paused" | "transfer_hook" | "mint_unreadable" | "no_balance" | null;
+  multiplier: string | null; rebases: Rebase[]; blocked: "paused" | "transfer_hook" | "mint_unreadable" | "no_balance" | "pyth_unavailable" | "pyth_divergence" | null;
   multiplier_event: { detected_at: string; old_multiplier: string; new_multiplier: string; pre_price_usd: string | null } | null;
+  // pyth (branch pyth): where the execution session came from, and what the second witness saw before the last execution attempt
+  last_session_source?: "pyth" | "calendar" | "forced" | null;
+  pyth_check?: PythCheck | null;
 };
+/** Refusal-only witness record. `agree`/`market_closed`/`not_entitled`/`no_feed` let execution proceed; the rest stopped it. */
+export type PythCheck = { checked_at: string; exec_price_usd: string; session: string; status: "agree" | "diverged" | "stale" | "unreadable" | "market_closed" | "not_entitled" | "no_feed";
+  reference?: string; pyth_price_usd?: string; pyth_conf_usd?: string; pyth_publish_utc?: string; age_s?: number; divergence_bps?: number; feeds?: Record<string, string> };
 /** A multiplier change, classified on the reading after it: a split moves the floor by the ratio, an accrual leaves it untouched. */
 export type Rebase = { at: string; kind: "split" | "accrual"; old_floor: string; new_floor: string; old_multiplier: string; new_multiplier: string; pre_price_usd: string | null; post_price_usd: string };
 type Store = { orders: Order[] };

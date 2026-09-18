@@ -39,6 +39,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           KEEPER_SECRET_KEY: ${{ secrets.KEEPER_SECRET_KEY }}
+          PYTH_API_KEY: ${{ secrets.PYTH_API_KEY }}
           RPC_URL: ${{ vars.RPC_URL }}
           KEEPER_DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
           GIT_AUTHOR_NAME: Lydia Solomon
