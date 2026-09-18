@@ -23,7 +23,11 @@ function rawFromUi(ui: string, decimals: number, multiplier: string): bigint {
   return (q * 10n ** BigInt(decimals) * ms) / (qs * m);
 }
 const MEMO_PROGRAM = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
-const RECORDED: Record<string, string> = { NVDAx: "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh", TSLAx: "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB", SPYx: "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W" };
+const RECORDED: Record<string, string> = { NVDAx: "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh", TSLAx: "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB", SPYx: "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W",
+  ANDURIL: "PresTj4Yc2bAR197Er7wz4UUKSfqt6FryBEdAriBoQB", ANTHROPIC: "Pren1FvFX6J3E4kXhJuCiAD5aDmGEb7qJRncwA8Lkhw", FIGUREAI: "PreZad18qfPtbxNpMtMuAuX2zVpvkEU8DnJx56faCWd", KALSHI: "PreLWGkkeqG1s4HEfFZSy9moCrJ7btsHuUtfcCeoRua",
+  NEURALINK: "PrekqLJvJ3qVdXmBGDiexvwUTF4rLFDa6HWS4HJbw9S", OPENAI: "PreweJYECqtQwBtpxHL171nL2K6umo692gTm7Q3rpgF", POLYMARKET: "Pre8AREmFPtoJFT8mQSXQLh56cwJmM7CFDRuoGBZiUP", SPACEX: "PreANxuXjsy2pvisWWMNB6YaJNzr7681wJJr2rHsfTh" };
+const NO_MARKET = new Set(["PresTj4Yc2bAR197Er7wz4UUKSfqt6FryBEdAriBoQB", "Pren1FvFX6J3E4kXhJuCiAD5aDmGEb7qJRncwA8Lkhw", "PreZad18qfPtbxNpMtMuAuX2zVpvkEU8DnJx56faCWd", "PreLWGkkeqG1s4HEfFZSy9moCrJ7btsHuUtfcCeoRua",
+  "PrekqLJvJ3qVdXmBGDiexvwUTF4rLFDa6HWS4HJbw9S", "PreweJYECqtQwBtpxHL171nL2K6umo692gTm7Q3rpgF", "Pre8AREmFPtoJFT8mQSXQLh56cwJmM7CFDRuoGBZiUP", "PreANxuXjsy2pvisWWMNB6YaJNzr7681wJJr2rHsfTh"]);
 
 type History = { rows: Row[]; stats: Stats; gap: Gap | null; regimes: Record<string, { hours: string; confirmations: number; slippageBps: number; splitOnImpact: boolean }> };
 type Holding = { mint: string; ticker: string; name: string; tokenAccount: string; decimals: number; raw: string; ui: number; uiString: string; delegate: string | null; delegatedRaw: string; price: number | null; multiplier: string };
@@ -105,10 +109,10 @@ export default function Screen() {
   const activeForSel = live.find((o) => o.ticker === sel) ?? null;
   const floor = Number(floorText);
   const floorForChart = activeForSel ? Number(activeForSel.floor_price_usd) : Number.isFinite(floor) && floor > 0 ? floor : null;
-  const selMint = holding?.mint ?? RECORDED[sel] ?? null;
-  const price = holding?.price ?? (selMint && history ? history.stats.perTicker[sel]?.last ?? null : null);
   const rows = history?.rows ?? [];
-  const lastSession = history?.stats.currentSession ?? null;
+  const selMint = holdings?.find((h) => h.ticker === sel)?.mint ?? RECORDED[sel] ?? null;
+  const lastSession = selMint && NO_MARKET.has(selMint) ? "closed" : history?.stats.currentSession ?? null;
+  const price = holding?.price ?? (selMint && history ? history.stats.perTicker[sel]?.last ?? null : null);
   const regime = lastSession && history ? history.regimes[lastSession] : null;
 
   useEffect(() => { if (holding && !qtyText) setQtyText(holding.uiString); }, [holding, qtyText]);

@@ -11,10 +11,11 @@ with tempfile.TemporaryDirectory() as tmp:
     rows = list(csv.reader(open(path, newline="")))
 
 assert rows[0] == recorder.HEADER, rows[0]
-assert len(rows) == 1 + len(recorder.TICKERS), len(rows)
+assert len(rows) == 1 + len(recorder.ALL), len(rows)
 for ts, ticker, mint, price, session, source in rows[1:]:
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", ts), ts
-    assert recorder.TICKERS[ticker] == mint
-    assert session in {"open", "overnight", "weekend"}, session
+    assert recorder.ALL[ticker] == mint
+    assert session in {"open", "overnight", "weekend", "closed"}, session
+    assert (session == "closed") == (ticker in recorder.NO_MARKET), (ticker, session)
     assert (source == recorder.SOURCE and float(price) > 0) or (source == "error" and price == ""), (price, source)
 print("smoke test passed:", rows[1:])
