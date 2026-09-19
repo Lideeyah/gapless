@@ -211,6 +211,15 @@ the recorder makes one call per five minutes.
 ticker, the Jupiter price the primary series recorded, the market flag, and both Pyth feeds with
 price, confidence, publish time and status. `prices.csv` is untouched; its columns keep their meaning.
 
+Rows whose equity status reads `backfilled` were not taken live. The collector for the first night
+(2026-09-18 21:10 to 2026-09-19 07:40 UTC) ran on a laptop that slept, so those stamps were filled
+afterwards from Hermes' historical endpoint (`/v2/updates/price/{publish_time}`) at the exact stamps
+the primary series recorded, with the Jupiter price copied from `data/prices.csv` at the same stamp.
+Before the feed froze at 20:00 ET each row carries the print Hermes served for that second; after it,
+the frozen print the live endpoint was still serving. They are appended out of order and are
+identifiable by their status; everything since runs on GitHub Actions and is live. The collector
+never depends on a laptop again.
+
 **Shown.** The landing page draws Pyth's TSLA equity line (ink) over our own recorded TSLAx line
 (green), with the shaded closed hours taken from Pyth's flag rather than from our labels, and states
 the reopen figures once a full closure with regular-hours readings on both sides exists. One line is a
