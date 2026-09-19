@@ -62,7 +62,14 @@ jobs:
           EOF
             git add data/pyth.csv
             git commit -qm "pyth $(date -u +%Y-%m-%dT%H:%M:%SZ)" || true
-            git push -q origin HEAD:pyth || (git pull --rebase -q origin pyth && git push -q origin HEAD:pyth) || echo "push failed; the reading rides with the next push"
+            pushed=0
+            for attempt in 1 2 3 4 5 6; do
+              git push -q origin HEAD:pyth && pushed=1 && break
+              git rebase --abort 2>/dev/null || true
+              git pull --rebase -q origin pyth || git rebase --abort 2>/dev/null || true
+              sleep $((attempt * 2))
+            done
+            [ "$pushed" = "1" ] || echo "push failed after 6 attempts; the reading rides with the next push"
           done
 
       - name: Hand off to the next run (unless one is already queued)
