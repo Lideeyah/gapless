@@ -104,6 +104,7 @@ timestamp_utc,ticker,jupiter_price_usd,market_open,equity_feed,equity_price,equi
 2026-09-19T08:25:00Z,NVDAx,222.10360659005593,0,Equity.US.NVDA/USD,,,,not_entitled,Crypto.NVDAX/USD,,,,not_entitled
 2026-09-19T08:25:00Z,TSLAx,364.65078034873704,0,Equity.US.TSLA/USD,364.18248000000006,0.03248,2026-09-18T23:59:59Z,ok,Crypto.TSLAX/USD,,,,not_entitled
 2026-09-19T08:25:00Z,SPYx,762.7347207841192,0,Equity.US.SPY/USD,,,,not_entitled,Crypto.SPYX/USD,,,,not_entitled
+<<<<<<< HEAD
 2026-09-18T22:15:09Z,NVDAx,222.14027314527277,0,Equity.US.NVDA/USD,,,,not_entitled,Crypto.NVDAX/USD,,,,not_entitled
 2026-09-18T22:15:09Z,TSLAx,364.04074387237506,0,Equity.US.TSLA/USD,364.13504,0.03504,2026-09-18T22:15:09Z,backfilled,Crypto.TSLAX/USD,,,,not_entitled
 2026-09-18T22:15:09Z,SPYx,760.5714268715122,0,Equity.US.SPY/USD,,,,not_entitled,Crypto.SPYX/USD,,,,not_entitled
@@ -320,3 +321,11 @@ timestamp_utc,ticker,jupiter_price_usd,market_open,equity_feed,equity_price,equi
 2026-09-19T07:20:00Z,NVDAx,221.88962782748345,0,Equity.US.NVDA/USD,,,,not_entitled,Crypto.NVDAX/USD,,,,not_entitled
 2026-09-19T07:20:00Z,TSLAx,364.11960387043086,0,Equity.US.TSLA/USD,364.18248000000006,0.03248,2026-09-18T23:59:59Z,backfilled,Crypto.TSLAX/USD,,,,not_entitled
 2026-09-19T07:20:00Z,SPYx,761.7264364166444,0,Equity.US.SPY/USD,,,,not_entitled,Crypto.SPYX/USD,,,,not_entitled
+=======
+2026-09-19T08:30:00Z,NVDAx,221.78949308169555,0,Equity.US.NVDA/USD,,,,not_entitled,Crypto.NVDAX/USD,,,,not_entitled
+2026-09-19T08:30:00Z,TSLAx,364.4129835840177,0,Equity.US.TSLA/USD,364.18248000000006,0.03248,2026-09-18T23:59:59Z,ok,Crypto.TSLAX/USD,,,,not_entitled
+2026-09-19T08:30:00Z,SPYx,762.6273639827654,0,Equity.US.SPY/USD,,,,not_entitled,Crypto.SPYX/USD,,,,not_entitled
+>>>>>>> 207a8c1 (pyth 2026-09-19T08:30:02Z)
+2026-09-19T08:35:00Z,NVDAx,222.19302721282028,0,Equity.US.NVDA/USD,,,,not_entitled,Crypto.NVDAX/USD,,,,not_entitled
+2026-09-19T08:35:00Z,TSLAx,364.5525212707558,0,Equity.US.TSLA/USD,364.18248000000006,0.03248,2026-09-18T23:59:59Z,ok,Crypto.TSLAX/USD,,,,not_entitled
+2026-09-19T08:35:00Z,SPYx,762.5942056454047,0,Equity.US.SPY/USD,,,,not_entitled,Crypto.SPYX/USD,,,,not_entitled
