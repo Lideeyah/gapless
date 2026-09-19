@@ -42,7 +42,7 @@ jobs:
           end=$((SECONDS + 5*3600 + 40*60))
           while [ "$SECONDS" -lt "$end" ]; do
             sleep $((300 - $(date +%s) % 300))
-            python - <<'EOF' || echo "witness reading failed; continuing"
+            timeout 120 python - <<'EOF' || echo "witness reading failed or timed out; continuing"
           import csv, os, sys
           from datetime import datetime, timezone
           sys.path.insert(0, ".")
@@ -64,9 +64,9 @@ jobs:
             git commit -qm "pyth $(date -u +%Y-%m-%dT%H:%M:%SZ)" || true
             pushed=0
             for attempt in 1 2 3 4 5 6; do
-              git push -q origin HEAD:pyth && pushed=1 && break
+              timeout 60 git push -q origin HEAD:pyth && pushed=1 && break
               git rebase --abort 2>/dev/null || true
-              git pull --rebase -q origin pyth || git rebase --abort 2>/dev/null || true
+              timeout 120 git pull --rebase -q origin pyth || git rebase --abort 2>/dev/null || true
               sleep $((attempt * 2))
             done
             [ "$pushed" = "1" ] || echo "push failed after 6 attempts; the reading rides with the next push"
