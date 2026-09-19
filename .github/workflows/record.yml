@@ -36,18 +36,20 @@ jobs:
           git config user.email "lydiasolomon137@gmail.com"
           end=$((SECONDS + 5*3600 + 40*60))
           while [ "$SECONDS" -lt "$end" ]; do
-            python recorder.py || echo "recorder exited non-zero; continuing"
+            timeout 120 python recorder.py || echo "recorder exited non-zero or timed out; continuing"
             git add data/prices.csv
             git commit -qm "record $(date -u +%Y-%m-%dT%H:%M:%SZ)" || true
             # Push race: if the branch moved (keeper or app commits), rebase and retry once.
             # The keeper commits to main through the API twice per cycle at the same seconds this push lands,
             # so one rebase-and-retry can lose the race every cycle. Retry up to six times, never leave a
             # rebase half-done, and never let a failed push stop the next reading.
+            # Every network call gets a hard clock: a git push or pull that hangs would otherwise stall the
+            # loop for the rest of the job, silently, with every later reading lost (seen twice on 2026-09-19).
             pushed=0
             for attempt in 1 2 3 4 5 6; do
-              git push -q origin HEAD:main && pushed=1 && break
+              timeout 60 git push -q origin HEAD:main && pushed=1 && break
               git rebase --abort 2>/dev/null || true
-              git pull --rebase -q origin main || git rebase --abort 2>/dev/null || true   # keep the local readings; try again next cycle
+              timeout 120 git pull --rebase -q origin main || git rebase --abort 2>/dev/null || true   # keep the local readings; try again next cycle
               sleep $((attempt * 2))
             done
             [ "$pushed" = "1" ] || echo "push failed after 6 attempts; the reading stays committed locally and rides with the next push"
