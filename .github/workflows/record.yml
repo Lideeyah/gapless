@@ -40,7 +40,17 @@ jobs:
             git add data/prices.csv
             git commit -qm "record $(date -u +%Y-%m-%dT%H:%M:%SZ)" || true
             # Push race: if the branch moved (keeper or app commits), rebase and retry once.
-            git push -q origin HEAD:main || (git pull --rebase -q origin main && git push -q origin HEAD:main) || echo "push failed; the reading stays committed locally and rides with the next push"
+            # The keeper commits to main through the API twice per cycle at the same seconds this push lands,
+            # so one rebase-and-retry can lose the race every cycle. Retry up to six times, never leave a
+            # rebase half-done, and never let a failed push stop the next reading.
+            pushed=0
+            for attempt in 1 2 3 4 5 6; do
+              git push -q origin HEAD:main && pushed=1 && break
+              git rebase --abort 2>/dev/null || true
+              git pull --rebase -q origin main || git rebase --abort 2>/dev/null || true   # keep the local readings; try again next cycle
+              sleep $((attempt * 2))
+            done
+            [ "$pushed" = "1" ] || echo "push failed after 6 attempts; the reading stays committed locally and rides with the next push"
             sleep $((300 - $(date +%s) % 300))
           done
 
