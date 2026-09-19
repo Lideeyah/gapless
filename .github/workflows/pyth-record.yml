@@ -1,0 +1,74 @@
+# Branch-only witness recorder. Runs on the `pyth` branch, appends Pyth readings to data/pyth.csv every
+# five minutes and commits them to the `pyth` branch. It never pushes to main and never touches
+# data/prices.csv. Once `pyth` is merged, recorder.py on main writes pyth.csv itself and this file is
+# deleted in the same merge.
+name: pyth-record
+
+on:
+  push:
+    branches: [pyth]
+    paths-ignore: ["data/pyth.csv"]   # the workflow's own commits must not re-trigger it
+  workflow_dispatch:
+  schedule:
+    - cron: "11,41 * * * *"           # backstop only; the guard below keeps it off any other branch
+
+concurrency:
+  group: pyth-record
+  cancel-in-progress: false
+
+jobs:
+  record:
+    if: github.ref_name == 'pyth'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: pyth
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Record the witness every 5 minutes for ~5h40m, committing each reading to the pyth branch
+        env:
+          PYTH_API_KEY: ${{ secrets.PYTH_API_KEY }}
+        run: |
+          git config user.name "Lydia Solomon"
+          git config user.email "lydiasolomon137@gmail.com"
+          end=$((SECONDS + 5*3600 + 40*60))
+          while [ "$SECONDS" -lt "$end" ]; do
+            sleep $((300 - $(date +%s) % 300))
+            python - <<'EOF' || echo "witness reading failed; continuing"
+          import csv, os, sys
+          from datetime import datetime, timezone
+          sys.path.insert(0, ".")
+          import pyth, recorder
+          ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+          try:
+              prices = recorder.fetch_prices(list(recorder.TICKERS.values()))
+          except Exception as exc:
+              print(f"jupiter read failed: {exc!r}", file=sys.stderr); prices = {}
+          rows = pyth.pyth_rows(ts, {t: prices.get(m) for t, m in recorder.TICKERS.items()})
+          new = not os.path.exists(recorder.PYTH_CSV_PATH) or os.path.getsize(recorder.PYTH_CSV_PATH) == 0
+          with open(recorder.PYTH_CSV_PATH, "a", newline="") as f:
+              w = csv.writer(f)
+              if new: w.writerow(pyth.PYTH_HEADER)
+              w.writerows(rows)
+          for r in rows: print(",".join(r))
+          EOF
+            git add data/pyth.csv
+            git commit -qm "pyth $(date -u +%Y-%m-%dT%H:%M:%SZ)" || true
+            git push -q origin HEAD:pyth || (git pull --rebase -q origin pyth && git push -q origin HEAD:pyth) || echo "push failed; the reading rides with the next push"
+          done
+
+      - name: Hand off to the next run (unless one is already queued)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          queued=$(gh run list --workflow=pyth-record.yml --status queued --json databaseId --jq 'length')
+          if [ "$queued" = "0" ]; then gh workflow run pyth-record.yml --ref pyth; else echo "a run is already queued; not dispatching"; fi
