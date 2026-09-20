@@ -90,7 +90,7 @@
       "quantity_raw": "450595",
       "decimals": 8,
       "floor_price_usd": "220.50",
-      "status": "triggered",
+      "status": "executing",
       "breach_count": 3,
       "last_checked_at": "2026-09-20T06:45:01Z",
       "delegation_sig": "3xyZbrS5zKvT1d7cJGJT5fhVZmR28SzV8PenyDNHDy4L46PX3NkkqRzcFPpBmZFCwgK9ZKHcQdvqrpSyttXbGwJd",
@@ -103,19 +103,21 @@
       "delegate": "HbJ7XbcY2VsunoeK9v6o3FwKGvwfTBQ7horU9d3fonKs",
       "remaining_raw": "450595",
       "fills": [],
-      "last_decision": "triggered: breach 3/3 in weekend, 220.4720 at or below floor",
+      "last_decision": "executing 450595 raw, pending 3MKesA6YBeXG8NtofcazcEr1XWXKmvMBJ3oHHqPQd85pySN7UrsVCajKfXYzfZf4uFxVVoTKKBtiaPgKq5LExbEB",
       "last_session": "weekend",
       "last_price_usd": "220.4719678822044",
-      "pending_sig": null,
-      "pending_amount_raw": null,
-      "pending_since": null,
+      "pending_sig": "3MKesA6YBeXG8NtofcazcEr1XWXKmvMBJ3oHHqPQd85pySN7UrsVCajKfXYzfZf4uFxVVoTKKBtiaPgKq5LExbEB",
+      "pending_amount_raw": "450595",
+      "pending_since": "2026-09-20T06:45:05Z",
       "revoke_sig": null,
       "multiplier": "1.001701196801074",
       "rebases": [],
       "blocked": null,
       "multiplier_event": null,
       "breach_session": "weekend",
-      "breach_last_at": "2026-09-20T06:45:01Z"
+      "breach_last_at": "2026-09-20T06:45:01Z",
+      "pending_last_valid_block_height": 426695095,
+      "pending_multiplier": "1.001701196801074"
     }
   ]
 }
