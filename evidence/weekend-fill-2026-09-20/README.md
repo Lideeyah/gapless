@@ -9,7 +9,7 @@ the raw records.
 |---|---|
 | `transaction.json` | `getTransaction` for the fill, finalized, as the RPC returned it: one v0 transaction signed only by the keeper |
 | `order.json` | the order's final record from `data/orders.json` |
-| `keeper-log.json` | every version of the order the keeper committed from arming (2026-09-19 09:43 UTC) to the fill, one entry per commit, with the decision it wrote |
+| `keeper-log.json` | every version of the order the keeper committed from arming (2026-09-19 09:43 UTC) to the fill, one entry per commit (257 entries, every keeper cycle across the window), with the decision it wrote |
 | `recorder-nvdax-…csv` | the recorder's NVDAx rows from Friday 19:30 UTC (before the close) through Sunday 17:00 UTC, verbatim from `data/prices.csv` |
 | `wallet.json` | the owner's token balances before and after, from the transaction's own balance deltas, plus the live balances at capture time |
 
@@ -38,7 +38,7 @@ Keeper (signer): `HbJ7XbcY2VsunoeK9v6o3FwKGvwfTBQ7horU9d3fonKs`
 
 ## Hashes (SHA-256)
 
-- `keeper-log.json` `462bf2d04fc6f0a2eb076f6c36e357348f295b761947ad76519334273b610b87`
+- `keeper-log.json` `c9ef920a92aa38cf1d4309a11fbdabd34c1f7ab71ef65f608ca31fcdec56b8be`
 - `order.json` `5828d55964c2f6591bdd279fffc931656195ac00752d13bb37c837fb6c358323`
 - `recorder-nvdax-2026-09-18T19-30Z_to_2026-09-20T17-00Z.csv` `6d67576e165684f8df58bbd594e72c64f70be9859c15c3f57717ee14f116710e`
 - `transaction.json` `6c8c69c0755809da45cac8e16947a31349e029868db0e2ed23b95dd5d599fe97`
