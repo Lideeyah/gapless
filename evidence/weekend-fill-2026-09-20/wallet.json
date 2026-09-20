@@ -1,0 +1,22 @@
+{
+ "owner": "8iHARjAovzK2LGpXzADqUTUE4ocdssxzPRfgT3CuTuvf",
+ "transaction": "3MKesA6YBeXG8NtofcazcEr1XWXKmvMBJ3oHHqPQd85pySN7UrsVCajKfXYzfZf4uFxVVoTKKBtiaPgKq5LExbEB",
+ "slot": 448654228,
+ "block_time_utc": "2026-09-20T06:45:05Z",
+ "fee_lamports_paid_by_keeper": 5280,
+ "balances_in_transaction": {
+  "8iHARjAovzK2LGpXzADqUTUE4ocdssxzPRfgT3CuTuvf:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": {
+   "pre": "7.471035",
+   "post": "8.466541"
+  },
+  "8iHARjAovzK2LGpXzADqUTUE4ocdssxzPRfgT3CuTuvf:Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh": {
+   "pre": "0.00450595",
+   "post": "0"
+  }
+ },
+ "balances_now": {
+  "read_at": "2026-09-20T17:04:37Z",
+  "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh": "0",
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "8.466541"
+ }
+}
