@@ -91,8 +91,8 @@
       "decimals": 8,
       "floor_price_usd": "220.50",
       "status": "armed",
-      "breach_count": 1,
-      "last_checked_at": "2026-09-20T05:50:00Z",
+      "breach_count": 2,
+      "last_checked_at": "2026-09-20T05:55:01Z",
       "delegation_sig": "3xyZbrS5zKvT1d7cJGJT5fhVZmR28SzV8PenyDNHDy4L46PX3NkkqRzcFPpBmZFCwgK9ZKHcQdvqrpSyttXbGwJd",
       "fill_sig": null,
       "fill_price_usd": null,
@@ -103,9 +103,9 @@
       "delegate": "HbJ7XbcY2VsunoeK9v6o3FwKGvwfTBQ7horU9d3fonKs",
       "remaining_raw": "450595",
       "fills": [],
-      "last_decision": "breach 1/3 in weekend: 220.4121 at or below floor; waiting for confirmation",
+      "last_decision": "breach 2/3 in weekend: 220.4171 at or below floor; waiting for confirmation",
       "last_session": "weekend",
-      "last_price_usd": "220.41208708445203",
+      "last_price_usd": "220.41706708493655",
       "pending_sig": null,
       "pending_amount_raw": null,
       "pending_since": null,
@@ -115,7 +115,7 @@
       "blocked": null,
       "multiplier_event": null,
       "breach_session": "weekend",
-      "breach_last_at": "2026-09-20T05:50:01Z"
+      "breach_last_at": "2026-09-20T05:55:01Z"
     }
   ]
 }
