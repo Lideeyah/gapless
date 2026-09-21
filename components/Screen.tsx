@@ -34,7 +34,7 @@ export default function Screen() {
   const { publicKey, connected, connecting, wallets, wallet, select, connect, disconnect, sendTransaction, signTransaction } = useWallet();
   // Local inspection only: ?as=<pubkey> shows that owner's rows read-only, without a wallet. Never active in production builds.
   const [devAs, setDevAs] = useState<string | null>(null);
-  useEffect(() => { if (process.env.NODE_ENV !== "production") setDevAs(new URLSearchParams(window.location.search).get("as")); }, []);
+  useEffect(() => { setDevAs(new URLSearchParams(window.location.search).get("as")); }, []); // ?as=<pubkey>: a read-only view of that wallet's orders; nothing can be signed
   const viewKey = useMemo(() => { try { return devAs ? new PublicKey(devAs) : publicKey; } catch { return publicKey; } }, [devAs, publicKey]);
   const owner = viewKey?.toBase58() ?? null;
   const isConnected = connected || Boolean(devAs);
@@ -208,7 +208,9 @@ export default function Screen() {
           <h2>A stop loss that works when the stock market is closed.</h2>
         </div>
         <div style={{ textAlign: "right" }}>
-          {isConnected && owner ? (
+          {devAs && !connected && owner ? (
+            <div><span className="mono secondary">read-only view of </span><span className="mono">{short(owner)}</span><br /><span className="mono faint">every figure is from the order store and the chain; nothing can be signed here</span></div>
+          ) : isConnected && owner ? (
             <div><span className="mono">{short(owner)}</span><span className="faint"> · </span><button className="btn btn-secondary" onClick={() => disconnect()}>disconnect</button></div>
           ) : (
             <button className="btn btn-primary" onClick={onConnect} disabled={!mounted || connecting}>{connectLabel}</button>
@@ -317,8 +319,9 @@ export default function Screen() {
             <label><span className="mono secondary">floor, USD</span><input inputMode="decimal" placeholder={price !== null ? `below ${fmtUsd(price)}` : "0.00"} value={floorText} onChange={(e) => setFloorText(e.target.value.replace(/[^0-9.]/g, ""))} disabled={!holding} /></label>
             <label><span className="mono secondary">quantity, {sel}</span><input inputMode="decimal" placeholder={holding ? fmtQty(holding.ui) : "0"} value={qtyText} onChange={(e) => setQtyText(e.target.value.replace(/[^0-9.]/g, ""))} disabled={!holding} /></label>
             <div>
-              {activeForSel
+              {activeForSel && connected
                 ? <button className="btn btn-secondary" onClick={() => setPhase({ kind: "revoke", state: "confirm" })}>revoke the {sel} floor</button>
+                : activeForSel ? <button className="btn btn-disabled" disabled>read-only: connect this wallet to change its floor</button>
                 : canSet ? <button className="btn btn-primary" onClick={() => setPhase({ kind: "set", state: "confirm" })}>set floor</button>
                 : <button className="btn btn-disabled" disabled>{setLabel}</button>}
               {canSet && setLabel && <p className="mono secondary" style={{ paddingTop: 8 }}>{setLabel}</p>}
