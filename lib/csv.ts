@@ -2,7 +2,7 @@
 // interface shows. Nothing here is cached beyond the fetch itself; nothing is interpolated.
 
 export type Reading = { t: string; ms: number; ticker: string; mint: string; price: number | null; session: Session; source: string };
-export type Session = "open" | "overnight" | "weekend";
+export type Session = "open" | "overnight" | "weekend" | "closed"; // closed: an asset with no market session at all (tokenised pre-IPO)
 
 const RAW_URL = process.env.PRICES_CSV_URL ?? "https://raw.githubusercontent.com/Lideeyah/gapless/main/data/prices.csv";
 export const CADENCE_MS = 5 * 60 * 1000;
@@ -31,7 +31,11 @@ export function parseCsv(text: string): Reading[] {
 export type Closure = { session: Session; startMs: number; endMs: number; readings: number; full: boolean };
 
 /** Contiguous runs of non-open readings, by distinct timestamp. `full` means open readings exist on both sides. */
-export function closures(rows: Reading[]): Closure[] {
+/** Rows of assets that have market sessions. Permanently closed assets are excluded from every NYSE-session figure. */
+export const withSessions = (rows: Reading[]) => rows.filter((r) => r.session !== "closed");
+
+export function closures(allRows: Reading[]): Closure[] {
+  const rows = withSessions(allRows);
   const byTs = new Map<number, Session>();
   for (const r of rows) byTs.set(r.ms, r.session);
   const ts = [...byTs.keys()].sort((a, b) => a - b);
@@ -53,7 +57,8 @@ export function closures(rows: Reading[]): Closure[] {
 export type Gap = { ticker: string; closeAt: string; closePrice: number; extremeAt: string; extremePrice: number; reopenAt: string; reopenPrice: number; movePct: number; extremePct: number; session: Session; lowAt: string; lowPrice: number; lowPct: number };
 
 /** Largest gap across full closures: last open reading before, extreme during, first open reading after. */
-export function largestGap(rows: Reading[]): Gap | null {
+export function largestGap(allRows: Reading[]): Gap | null {
+  const rows = withSessions(allRows);
   let best: Gap | null = null;
   for (const c of closures(rows).filter((c) => c.full)) {
     for (const ticker of new Set(rows.map((r) => r.ticker))) {
@@ -80,9 +85,10 @@ export type Stats = {
   perTicker: Record<string, { readings: number; last: number | null; lastAt: string | null; minClosed: number | null; maxClosed: number | null; closedMove: number; totalMove: number }>;
 };
 
-export function stats(rows: Reading[]): Stats {
-  const tickers = [...new Set(rows.map((r) => r.ticker))].sort();
-  const readings = new Set(rows.map((r) => r.ms)).size;
+export function stats(allRows: Reading[]): Stats {
+  const rows = withSessions(allRows); // session shares and closures: assets with sessions only
+  const tickers = [...new Set(allRows.map((r) => r.ticker))].sort();
+  const readings = new Set(allRows.map((r) => r.ms)).size;
   const closed = rows.filter((r) => r.session !== "open");
   const cls = closures(rows);
   const last = rows.at(-1) ?? null;
@@ -90,39 +96,41 @@ export function stats(rows: Reading[]): Stats {
   const perTicker: Stats["perTicker"] = {};
   let closedMove = 0, totalMove = 0;
   for (const tk of tickers) {
-    const tr = rows.filter((r) => r.ticker === tk);
+    const tr = allRows.filter((r) => r.ticker === tk);
     let cm = 0, tm = 0;
     for (let i = 1; i < tr.length; i++) {
       const a = tr[i - 1], b = tr[i];
       if (a.price === null || b.price === null || b.ms - a.ms > GAP_MS) continue; // holes contribute nothing
       const d = Math.abs(b.price - a.price);
+      if (a.session === "closed") continue; // no session: contributes to nothing session-shaped
       tm += d; if (a.session !== "open") cm += d;
     }
     closedMove += cm; totalMove += tm;
     const priced = tr.filter((r) => r.price !== null);
-    const closedPriced = priced.filter((r) => r.session !== "open");
+    const closedPriced = priced.filter((r) => r.session === "overnight" || r.session === "weekend"); // NYSE closed hours only; a no-market asset has none
     perTicker[tk] = { readings: tr.length, last: priced.at(-1)?.price ?? null, lastAt: priced.at(-1)?.t ?? null,
       minClosed: closedPriced.length ? Math.min(...closedPriced.map((r) => r.price!)) : null,
       maxClosed: closedPriced.length ? Math.max(...closedPriced.map((r) => r.price!)) : null, closedMove: cm, totalMove: tm };
   }
-  return { computedAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"), firstAt: rows[0]?.t ?? null, lastAt: last?.t ?? null, rows: rows.length, readings,
-    errorRows: rows.filter((r) => r.source === "error").length, tickers,
+  return { computedAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"), firstAt: allRows[0]?.t ?? null, lastAt: allRows.at(-1)?.t ?? null, rows: allRows.length, readings,
+    errorRows: allRows.filter((r) => r.source === "error").length, tickers,
     closedShareOfReadings: rows.length ? closed.length / rows.length : 0, closedShareOfMovement: totalMove > 0 && rows.some((r) => r.session === "open") ? closedMove / totalMove : null, // meaningless until both regimes exist in the window
     closureCount: cls.length, fullClosureCount: cls.filter((c) => c.full).length, currentSession: last?.session ?? null,
     inClosureSince: open ? new Date(open.startMs).toISOString().replace(/\.\d+Z$/, "Z") : null, closureReadings: open?.readings ?? 0, perTicker };
 }
 
 /** For a downward gap: a floor halfway between the pre-close price and the extreme, and the first reading during closure at or below it. */
-export function floorExample(rows: Reading[], gap: Gap): { floor: number; at: string; price: number } | null {
+export function floorExample(allRows: Reading[], gap: Gap): { floor: number; at: string; price: number } | null {
   if (gap.extremePrice >= gap.closePrice) return null;
   const floor = Math.round(((gap.closePrice + gap.extremePrice) / 2) * 100) / 100;
   const c0 = Date.parse(gap.closeAt), c1 = Date.parse(gap.reopenAt);
-  const hit = rows.find((r) => r.ticker === gap.ticker && r.price !== null && r.ms > c0 && r.ms < c1 && r.session !== "open" && r.price <= floor);
+  const hit = withSessions(allRows).find((r) => r.ticker === gap.ticker && r.price !== null && r.ms > c0 && r.ms < c1 && r.session !== "open" && r.price <= floor);
   return hit ? { floor, at: hit.t, price: hit.price! } : null;
 }
 
 /** Complete closures, and how many of them saw any ticker trade below its pre-close price during the closure. */
-export function closureMoves(rows: Reading[]): { complete: number; belowClose: number } {
+export function closureMoves(allRows: Reading[]): { complete: number; belowClose: number } {
+  const rows = withSessions(allRows);
   const full = closures(rows).filter((c) => c.full);
   let belowClose = 0;
   for (const c of full) {

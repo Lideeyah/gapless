@@ -1,0 +1,61 @@
+{
+  "_comment": "Assets with no public market use the `closed` regime. `executable` is false until the fill path handles the Token-2022 transfer fee these mints carry (50 bps on every transfer, active since epoch 1032): the delegated transfer would deliver less than the swap is built for. Recording and evaluation work; execution is refused with a reason.",
+  "no_market": {
+    "PresTj4Yc2bAR197Er7wz4UUKSfqt6FryBEdAriBoQB": {
+      "ticker": "ANDURIL",
+      "issuer": "PreStocks",
+      "decimals": 9,
+      "executable": false,
+      "reason": "transfer fee 50 bps not yet handled by the fill path"
+    },
+    "Pren1FvFX6J3E4kXhJuCiAD5aDmGEb7qJRncwA8Lkhw": {
+      "ticker": "ANTHROPIC",
+      "issuer": "PreStocks",
+      "decimals": 9,
+      "executable": false,
+      "reason": "transfer fee 50 bps not yet handled by the fill path"
+    },
+    "PreZad18qfPtbxNpMtMuAuX2zVpvkEU8DnJx56faCWd": {
+      "ticker": "FIGUREAI",
+      "issuer": "PreStocks",
+      "decimals": 9,
+      "executable": false,
+      "reason": "transfer fee 50 bps not yet handled by the fill path"
+    },
+    "PreLWGkkeqG1s4HEfFZSy9moCrJ7btsHuUtfcCeoRua": {
+      "ticker": "KALSHI",
+      "issuer": "PreStocks",
+      "decimals": 9,
+      "executable": false,
+      "reason": "transfer fee 50 bps not yet handled by the fill path"
+    },
+    "PrekqLJvJ3qVdXmBGDiexvwUTF4rLFDa6HWS4HJbw9S": {
+      "ticker": "NEURALINK",
+      "issuer": "PreStocks",
+      "decimals": 9,
+      "executable": false,
+      "reason": "transfer fee 50 bps not yet handled by the fill path"
+    },
+    "PreweJYECqtQwBtpxHL171nL2K6umo692gTm7Q3rpgF": {
+      "ticker": "OPENAI",
+      "issuer": "PreStocks",
+      "decimals": 9,
+      "executable": false,
+      "reason": "transfer fee 50 bps not yet handled by the fill path"
+    },
+    "Pre8AREmFPtoJFT8mQSXQLh56cwJmM7CFDRuoGBZiUP": {
+      "ticker": "POLYMARKET",
+      "issuer": "PreStocks",
+      "decimals": 9,
+      "executable": false,
+      "reason": "transfer fee 50 bps not yet handled by the fill path"
+    },
+    "PreANxuXjsy2pvisWWMNB6YaJNzr7681wJJr2rHsfTh": {
+      "ticker": "SPACEX",
+      "issuer": "PreStocks",
+      "decimals": 9,
+      "executable": false,
+      "reason": "transfer fee 50 bps not yet handled by the fill path"
+    }
+  }
+}

@@ -295,6 +295,63 @@ hole is real and stays visible in the data.
   keeper was the only signer, ended the transaction holding no NVDAx and no USDC, and the owner's
   delegation was consumed to zero.
 
+## PreStocks: tokenised pre-IPO shares (branch `prestocks`)
+
+A tokenised public equity has a market that is open 32.5 hours a week. A tokenised pre-IPO share has
+no public market at all: no opening bell to correct a mispricing, no closing auction, no venue to
+exit on a schedule. Every hour is a closed hour, so a floor on one is protection for all 168 hours
+of the week rather than 135. The thin-book handling built for weekend xStocks (impact check, split
+across runs) applies unchanged.
+
+**What was found, on chain, 2026-09-18.** All eight assets listed by `https://prestocks.com/api/prestocks`
+are Solana Token-2022 mints with 9 decimals, one issuer authority (`WV9PJN7XTmTLVwbutCLFxp8TyePee6Xq5mRq6Fti5Wc`),
+and the same extension set as xStocks plus two more: MetadataPointer, PermanentDelegate, DefaultAccountState
+(initialized), **TransferFeeConfig**, ConfidentialTransferMint, ConfidentialTransferFeeConfig, TransferHook
+(no program), **ScaledUiAmount**, Pausable (not paused), TokenMetadata.
+
+| Ticker | Mint | Effective multiplier |
+|---|---|---|
+| ANDURIL | `PresTj4Yc2bAR197Er7wz4UUKSfqt6FryBEdAriBoQB` | 1 |
+| ANTHROPIC | `Pren1FvFX6J3E4kXhJuCiAD5aDmGEb7qJRncwA8Lkhw` | 1 |
+| FIGUREAI | `PreZad18qfPtbxNpMtMuAuX2zVpvkEU8DnJx56faCWd` | 1 |
+| KALSHI | `PreLWGkkeqG1s4HEfFZSy9moCrJ7btsHuUtfcCeoRua` | 1 |
+| NEURALINK | `PrekqLJvJ3qVdXmBGDiexvwUTF4rLFDa6HWS4HJbw9S` | 1 |
+| OPENAI | `PreweJYECqtQwBtpxHL171nL2K6umo692gTm7Q3rpgF` | 1.4861347 (since 2026-07-17) |
+| POLYMARKET | `Pre8AREmFPtoJFT8mQSXQLh56cwJmM7CFDRuoGBZiUP` | 1 |
+| SPACEX | `PreANxuXjsy2pvisWWMNB6YaJNzr7681wJJr2rHsfTh` | 5 (since 2026-06-08) |
+
+**Corporate actions.** PreStocks uses the same ScaledUiAmount mechanism as xStocks: SpaceX's
+multiplier is already 5 and OpenAI's 1.486, so the price-per-displayed-token collapse the mint guard
+exists to catch is not hypothetical here. The existing guard covers these mints without change: the
+multiplier is decoded from the same raw extension bytes, the split-versus-accrual classifier runs on
+the same two readings, and pause and hook refusals apply as they do to xStocks. Jupiter's price for
+these mints is per displayed unit, as for xStocks (a 10 USDC sell quote on SPACEX returns five times
+the displayed-unit price per raw token, matching the multiplier of 5).
+
+**Routing.** Every asset routes both ways at 10 USDC through the keeper's own path (`/swap/v2/build`,
+300 bps): sells route through Manifest, Meteora DLMM, Whirlpool, Raydium CLMM and others at 0.00% to
+1.41% price impact; buys at 0.00% to 1.34%. All eight are supported for recording and evaluation.
+
+**The one thing the existing machinery does not cover: the transfer fee.** Each mint charges 50 bps
+on every transfer (TransferFeeConfig, effective since epoch 1032; the chain was at epoch 1037 when
+checked). The keeper's fill path moves the delegated amount into the keeper's account and then
+swaps that amount; with the fee withheld, the keeper's account receives 99.5% of it and a swap built
+for the full amount would fail simulation. Making the fill path fee-aware is a change to the fill
+path, which this pass was not allowed to make, so `keeper/assets.json` marks every PreStocks mint
+`executable: false` with that reason. Recording and evaluation run; an order that triggers is
+refused before any route is requested, with the reason on its row. Lifting the flag needs one
+change: size the swap to the post-fee amount (Token-2022 `TransferChecked` withholds
+`ceil(amount × 50 / 10000)`).
+
+**The fourth regime.** `closed`, in `keeper/regimes.json`, reuses the weekend numbers exactly: three
+consecutive readings, 300 bps, impact check on every execution. Nothing new to justify. The recorder
+labels these rows `closed` instead of a NYSE session; the app draws them in their own band labelled
+"no market session"; and every NYSE-session figure on the site (closures, the counterfactual, the
+closed-hours shares) is computed from session-bearing assets only, so pre-IPO rows never masquerade
+as weekend readings.
+
+**Eligibility note.** No pre-IPO asset from any issuer other than PreStocks exists in this repository.
+
 ## Deliberately out of scope for v1
 
 - On-chain order records and program-enforced price conditions.

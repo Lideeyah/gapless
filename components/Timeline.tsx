@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fmtTs, fmtUsd } from "@/lib/format";
 
-export type Row = { t: string; ticker: string; price: number | null; session: "open" | "overnight" | "weekend" };
+export type Row = { t: string; ticker: string; price: number | null; session: "open" | "overnight" | "weekend" | "closed" };
 const CADENCE = 5 * 60 * 1000, GAP = 3 * CADENCE, MIN_READINGS = 20;
 
 export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minReadings = MIN_READINGS }: { rows: Row[]; ticker: string; floor: number | null; firstAt: string | null; lastAt: string | null; minReadings?: number }) {
@@ -28,7 +28,10 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minRead
     lo = Math.max(0, lo - pad); hi += pad; // a price axis never goes below zero
     const y = (p: number) => top + (1 - (p - lo) / (hi - lo)) * (h - top - bottom);
     // session bands from distinct timestamps, in order
-    const stamps = [...new Map(rows.map((r) => [Date.parse(r.t), r.session])).entries()].sort((a, b) => a[0] - b[0]);
+    // bands come from the selected ticker's own labels when it has no market session; otherwise from the session-bearing rows
+    const noMarket = series.length > 0 && series.every((r) => r.session === "closed");
+    const bandRows = noMarket ? series : rows.filter((r) => r.session !== "closed");
+    const stamps = [...new Map(bandRows.map((r) => [Date.parse(r.t), r.session])).entries()].sort((a, b) => a[0] - b[0]);
     const bands: { x0: number; x1: number; s: string; ms: number }[] = [];
     for (let i = 0; i < stamps.length; i++) {
       const [ms, s] = stamps[i];
@@ -42,7 +45,7 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minRead
     const labelW = (t: string) => t.length * 7.3 + 16;
     for (const b of bands) {
       const d = new Date(b.ms);
-      const label = `${b.s} · ${d.toISOString().slice(5, 16).replace("T", " ")}`;
+      const label = `${b.s === "closed" ? "no market session" : b.s} · ${d.toISOString().slice(5, 16).replace("T", " ")}`;
       const prev = marks.at(-1);
       if (prev && b.x0 - prev.x < labelW(prev.label)) continue; // would collide with the previous label
       marks.push({ x: b.x0, label, anchorEnd: b.x0 + labelW(label) > w });
@@ -91,7 +94,7 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minRead
           </defs>
           <g filter="url(#bleed)">
             {model.bands.map((b, i) => b.s === "open" ? null : (
-              <rect key={i} x={b.x0} y={top} width={Math.max(0.5, b.x1 - b.x0)} height={h - bottom - top} fill="#14161A" opacity={b.s === "weekend" ? 1 : 0.3} />
+              <rect key={i} x={b.x0} y={top} width={Math.max(0.5, b.x1 - b.x0)} height={h - bottom - top} fill="#14161A" opacity={b.s === "weekend" || b.s === "closed" ? 1 : 0.3} />
             ))}
           </g>
           {model.holes.map((g, i) => (
@@ -119,7 +122,7 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minRead
           )}
         </svg>
       )}
-      <div className="mono faint" style={{ lineHeight: "24px" }}>paper: open · ink 30%: overnight · ink: weekend · holes are missing readings · session labels are the recorder’s own</div>
+      <div className="mono faint" style={{ lineHeight: "24px" }}>paper: open · ink 30%: overnight · ink: weekend, or no market session at all · holes are missing readings · session labels are the recorder’s own</div>
     </div>
   );
 }

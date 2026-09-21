@@ -17,6 +17,20 @@ TICKERS = {
     "TSLAx": "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB",
     "SPYx": "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W",
 }
+# PreStocks tokenised pre-IPO shares (Token-2022, 9 decimals, mints from https://prestocks.com/api/prestocks,
+# verified on chain). A pre-IPO share has no public market, so these rows carry the session label "closed"
+# instead of a NYSE session: every hour is a closed hour.
+NO_MARKET = {
+    "ANDURIL": "PresTj4Yc2bAR197Er7wz4UUKSfqt6FryBEdAriBoQB",
+    "ANTHROPIC": "Pren1FvFX6J3E4kXhJuCiAD5aDmGEb7qJRncwA8Lkhw",
+    "FIGUREAI": "PreZad18qfPtbxNpMtMuAuX2zVpvkEU8DnJx56faCWd",
+    "KALSHI": "PreLWGkkeqG1s4HEfFZSy9moCrJ7btsHuUtfcCeoRua",
+    "NEURALINK": "PrekqLJvJ3qVdXmBGDiexvwUTF4rLFDa6HWS4HJbw9S",
+    "OPENAI": "PreweJYECqtQwBtpxHL171nL2K6umo692gTm7Q3rpgF",
+    "POLYMARKET": "Pre8AREmFPtoJFT8mQSXQLh56cwJmM7CFDRuoGBZiUP",
+    "SPACEX": "PreANxuXjsy2pvisWWMNB6YaJNzr7681wJJr2rHsfTh",
+}
+ALL = {**TICKERS, **NO_MARKET}
 # Jupiter Price API v3, keyless access (0.5 RPS, no sign-up) on the main host. Response: {mint: {"usdPrice": float, ...}, ...}
 PRICE_URL = "https://api.jup.ag/price/v3?ids="
 SOURCE = "jupiter-price-v3"
@@ -52,7 +66,7 @@ def main():
     timestamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     session = session_state(now)
     try:
-        prices = fetch_prices(list(TICKERS.values()))
+        prices = fetch_prices(list(ALL.values()))
     except Exception as exc:  # noqa: BLE001 - any failure must still produce rows and exit 0
         print(f"price fetch failed: {exc!r}", file=sys.stderr)
         prices = {}
@@ -63,11 +77,11 @@ def main():
         writer = csv.writer(f)
         if write_header:
             writer.writerow(HEADER)
-        for ticker, mint in TICKERS.items():
+        for ticker, mint in ALL.items():
             price = prices.get(mint)
             if price is None:
                 print(f"no price for {ticker}", file=sys.stderr)
-            row = [timestamp, ticker, mint, "" if price is None else repr(price), session,
+            row = [timestamp, ticker, mint, "" if price is None else repr(price), "closed" if ticker in NO_MARKET else session,
                    SOURCE if price is not None else "error"]
             writer.writerow(row)
             print(",".join(row))

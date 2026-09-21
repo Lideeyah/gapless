@@ -40,6 +40,13 @@ from solders.transaction import VersionedTransaction  # noqa: E402
 HERE = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(HERE, "regimes.json")) as _f:
     REGIMES = {k: v for k, v in json.load(_f).items() if not k.startswith("_")}
+with open(os.path.join(HERE, "assets.json")) as _f:
+    NO_MARKET = json.load(_f)["no_market"]  # mints with no public market: evaluated under the `closed` regime
+
+
+def regime_for(order, session):
+    """A permanently closed asset has no session; everything else takes the run's session."""
+    return "closed" if order["mint"] in NO_MARKET else session
 
 RPC_URL = os.environ.get("RPC_URL") or "https://api.mainnet-beta.solana.com"
 REPO = os.environ.get("GITHUB_REPOSITORY", "Lideeyah/gapless")
@@ -542,7 +549,9 @@ def run():
     # 3. evaluate every open order that was not settled or left executing above (a settled order waits for the next cycle)
     settled_ids = {x["id"] for x in touched}
     for o in [x for x in open_orders if x["id"] not in settled_ids and x["status"] not in TERMINAL]:
-        o["last_checked_at"], o["last_session"] = now, session
+        o_session = regime_for(o, session)
+        o_rules = REGIMES[o_session]
+        o["last_checked_at"], o["last_session"] = now, o_session
         touched.append(o)
         tag = order_tag(o)
         try:
@@ -572,13 +581,13 @@ def run():
                 o["breach_count"], o["status"] = 0, "armed"
                 o["last_decision"] = f"hold: {price:.4f} is above floor {o['floor_price_usd']}"
             else:
-                count_breach(o, session, now_utc.timestamp())
-                need = rules["confirmations"]
+                count_breach(o, o_session, now_utc.timestamp())
+                need = o_rules["confirmations"]
                 if o["breach_count"] >= need:
                     o["status"] = "triggered"
-                    o["last_decision"] = f"triggered: breach {o['breach_count']}/{need} in {session}, {price:.4f} at or below floor"
+                    o["last_decision"] = f"triggered: breach {o['breach_count']}/{need} in {o_session}, {price:.4f} at or below floor"
                 else:
-                    o["last_decision"] = f"breach {o['breach_count']}/{need} in {session}: {price:.4f} at or below floor; waiting for confirmation"
+                    o["last_decision"] = f"breach {o['breach_count']}/{need} in {o_session}: {price:.4f} at or below floor; waiting for confirmation"
             log(f"{tag} {o['last_decision']}")
         except Exception as exc:  # noqa: BLE001
             o["last_decision"] = f"error evaluating: {exc}"
@@ -588,7 +597,14 @@ def run():
     # 4. execute triggered orders
     for o in [x for x in open_orders if x["status"] == "triggered"]:
         tag = order_tag(o)
+        o_session = regime_for(o, session)
+        o_rules = REGIMES[o_session]
+        asset = NO_MARKET.get(o["mint"])
         try:
+            if asset and not asset.get("executable", False):
+                o["last_decision"] = f"triggered under the closed regime but execution is not enabled for {asset['ticker']}: {asset['reason']}"
+                log(f"{tag} {o['last_decision']}")
+                continue
             if keeper is None:
                 o["last_decision"] = "triggered but KEEPER_SECRET_KEY is not configured; cannot execute"
                 log(f"{tag} {o['last_decision']}")
@@ -615,7 +631,7 @@ def run():
                 log(f"{tag} {o['last_decision']}")
                 continue
             sell_cap = min(delegated, balance)  # never more than delegated, never more than is there
-            amount, raw, sig, lvbh, _ = build_execution(o, keeper, rules, sell_cap)
+            amount, raw, sig, lvbh, _ = build_execution(o, keeper, o_rules, sell_cap)
             if DRY_RUN:
                 o["last_decision"] = f"dry run: would execute {amount} raw (cap {sell_cap}), signature would be {sig}"
                 log(f"{tag} {o['last_decision']}")
@@ -626,7 +642,7 @@ def run():
             sha = save_orders(store, sha, f"keeper {now_iso()} executing {o['ticker']}", touched)
             log(f"{tag} {o['last_decision']}")
             send_and_confirm(raw, sig)
-            o["last_decision"] = settle_pending(o, session)
+            o["last_decision"] = settle_pending(o, o_session)
             log(f"{tag} {o['last_decision']}")
         except Exception as exc:  # noqa: BLE001
             if o["status"] == "executing":

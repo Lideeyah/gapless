@@ -37,9 +37,9 @@ export default function Counterfactual({ stats, gap }: { stats: Stats | null; ga
             {" "}A gap needs an open-hours reading on both sides of a closure. The first one the recorder can capture begins at the next 16:00 ET close and completes at the 09:30 ET open that follows it.
           </p>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 16, paddingTop: 24 }}>
-            {stats.tickers.map((tk) => {
+            {stats.tickers.filter((tk) => stats.perTicker[tk].minClosed !== null).map((tk) => {
               const p = stats.perTicker[tk];
-              return <Figure key={tk} label={`${tk} · closed-hours low / high so far`} value={p.minClosed === null ? "—" : `${fmtUsd(p.minClosed)} / ${fmtUsd(p.maxClosed)}`} small />;
+              return <Figure key={tk} label={`${tk} · closed-hours low / high so far`} value={`${fmtUsd(p.minClosed)} / ${fmtUsd(p.maxClosed)}`} small />;
             })}
           </div>
         </div>
