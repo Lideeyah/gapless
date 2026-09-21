@@ -1,0 +1,7 @@
+{
+  "_comment": "Pyth price check, read by keeper/keeper.py and shown by the web app. Refusal-only: a Pyth reading can stop a fill, never start one. Entitlement is per feed on the Pyth Terminal demo trial (expires 2026-10-02): today only Equity.US.TSLA/USD is covered, so the check is live for TSLAx and reports not_entitled for the rest. A not_entitled or missing key never blocks; an entitled feed that is unreadable or stale while the reference market is open does.",
+  "max_divergence_bps": 100,
+  "max_age_s": 120,
+  "trial_expires": "2026-10-02",
+  "entitled": ["Equity.US.TSLA/USD"]
+}

@@ -154,6 +154,81 @@ corporate action into a catastrophic sale if ignored.
 All of these run before the impact check and before any route is requested. Mint state is read from
 the same RPC the keeper already uses and cached only within a single cycle.
 
+## Pyth: market hours and a second witness
+
+Two uses of Pyth, weighted in this order.
+
+**Market hours, keyless, all assets.** Pyth's public feed list carries, per US equity feed, a live
+`market_hours.is_open` flag and the exchange's trading schedule for the coming twelve months,
+holidays and early closes included:
+
+```
+America/New_York;0930-1600,0930-1600,0930-1600,0930-1600,0930-1600,C,C;0907/C,1126/C,1127/0930-1300,1224/0930-1300,1225/C,...
+```
+
+The keeper now takes its execution session from that (`keeper/market_hours.py`) instead of the
+hand-typed table in `keeper/market_calendar.py`, which the audit flagged as a real defect: it had to
+be extended every year and an unlisted holiday fell through to `open`. The live reading can only ever
+tighten the recorder's label: `open` becomes `weekend` on a weekday closure and `overnight` on a
+half-day afternoon; nothing can turn a closed label into `open`. If the flag is unreadable the hand
+calendar decides, exactly as before, and the run line says which source decided. No key, no expiry,
+no dependency: a Hermes outage degrades to the previous behaviour.
+
+**A second price witness, refusal-only, trial-scoped.** Pyth publishes a regular equity feed
+(`Equity.US.TSLA/USD`) and an xStock feed (`Crypto.TSLAX/USD`) for the same underlying. Before a
+triggered order is executed, after the mint guard and before any route is requested, the keeper reads
+Pyth's feed for the asset and compares it with the price it is about to act on. Beyond
+`max_divergence_bps` (100) it refuses and records both values and the gap. A feed the key is entitled
+to that is unreadable, or older than `max_age_s` (120) while the session is `open`, refuses too:
+unknown is not agreement. Jupiter stays the execution price and the only decision input; a Pyth
+reading can stop a sale and can never start one. `keeper/pyth_check.py` proves that by inspection
+(checks 6a to 6d: the function writes only `blocked` and `pyth_check`, it has one call site in the
+execution step, and the evaluation step never reads it).
+
+What the key covers decides how much of this is live, and that was established from the API, not the
+documentation. The Pyth Terminal demo trial is a fixed bundle of 21 feeds; of the six this product
+needs, only `Equity.US.TSLA/USD` is in it (the other five answer `403 Not entitled`, per feed, with
+the asset class named). So:
+
+| asset | reference feed | witness state |
+|---|---|---|
+| TSLAx | `Equity.US.TSLA/USD` | live: compared when the print is fresh; `market_closed` when it is frozen outside NYSE hours |
+| NVDAx, SPYx | none entitled | `not_entitled`, recorded, never blocks |
+
+The trial lapses on **2026-10-02**, inside the judging window. From that moment every feed reads
+`key_rejected`, which the keeper treats like `not_entitled`: recorded, never blocking. The interface
+says so next to the regime line from the start, so the lapse looks like what it is rather than a
+fault. Access that is absent is not a reading; only access that is present and fails can refuse.
+
+Observed, not assumed: the equity feed keeps publishing through extended hours (a print one second
+old at 21:03 UTC, an hour after the 20:00 UTC close, confidence 0.012% of price), so "fresh" rather
+than "market open" is the test for whether the equity print is a like-for-like reference. Whether it
+freezes after 20:00 ET and over the weekend is what `data/pyth.csv` records next. Rate limits: 40
+back-to-back reads and a sustained 1 request per second returned 200 every time with no limit headers;
+the recorder makes one call per five minutes.
+
+**Recorded.** The recorder writes `data/pyth.csv` next to `data/prices.csv` at the same stamps: per
+ticker, the Jupiter price the primary series recorded, the market flag, and both Pyth feeds with
+price, confidence, publish time and status. `prices.csv` is untouched; its columns keep their meaning.
+
+Rows whose equity status reads `backfilled` were not taken live. The collector for the first night
+(2026-09-18 21:10 to 2026-09-19 07:40 UTC) ran on a laptop that slept, so those stamps were filled
+afterwards from Hermes' historical endpoint (`/v2/updates/price/{publish_time}`) at the exact stamps
+the primary series recorded, with the Jupiter price copied from `data/prices.csv` at the same stamp.
+Before the feed froze at 20:00 ET each row carries the print Hermes served for that second; after it,
+the frozen print the live endpoint was still serving. They are appended out of order and are
+identifiable by their status; everything since runs on GitHub Actions and is live. The collector
+never depends on a laptop again.
+
+**Shown.** The landing page draws Pyth's TSLA equity line (ink) over our own recorded TSLAx line
+(green), with the shaded closed hours taken from Pyth's flag rather than from our labels, and states
+the reopen figures once a full closure with regular-hours readings on both sides exists. One line is a
+third party's, the other is ours and verifiable in `data/prices.csv`; when the NYSE shuts, one stops.
+
+Setup: `PYTH_API_KEY` as a repository secret (both workflows pass it through) and in `.env.local`
+for local runs. Without it every price cell reads `no_key` and the market-hours integration still
+works in full.
+
 ## The keeper
 
 `keeper/keeper.py` runs on GitHub Actions in the same pattern as the recorder: one job checks orders
@@ -269,6 +344,9 @@ Free tiers only. No paid services.
    endpoint, which is rate-limited.
 3. **Workflows.** The `record` and `keeper` workflows need Actions enabled and workflow permissions
    set to read and write. Trigger each once by hand from the Actions tab to start its chain.
+4. **Pyth, optional.** Repository secret `PYTH_API_KEY` = a Pyth Terminal key (a free demo-trial
+   key works; see the Pyth section for what it covers). Without it the market-hours integration runs
+   in full and the price witness records `no_key` and never blocks.
 
 ## Why continuous runs instead of cron
 
@@ -359,7 +437,7 @@ as weekend readings.
 - Multiple orders per token account. One delegation, one order: a newer approve on the same account
   supersedes the older order.
 - Partial-fill UX beyond recording it. The weekend split is a safety mechanism, not a feature.
-- US market holidays. The recorder does not model them.
+- US market holidays in the recorder's labels. The recorder does not model them; the keeper reads them live from Pyth.
 - Notifications.
 - Any token that is not an xStock.
 
@@ -367,11 +445,12 @@ as weekend readings.
 
 - **Holiday calendar, two behaviours.** The recorder's `session_state()` has no calendar, so
   `data/prices.csv` labels NYSE holidays and the afternoons of half-days as `open`; cross-reference
-  the NYSE calendar when reading the data. The keeper does not trade on those labels: it layers
-  `keeper/market_calendar.py` (NYSE full closures and 13:00 ET early closes for 2026 and 2027) on top
-  and executes a weekday holiday under `weekend` rules and a half-day afternoon under `overnight`
-  rules. When the two disagree the keeper's log says so on the run line. The table must be extended
-  each year; an unlisted holiday falls back to the recorder's label, which is `open`.
+  the NYSE calendar when reading the data. The keeper does not trade on those labels: it takes the
+  execution session from Pyth's live `market_hours` flag and schedule (see the Pyth section) and
+  executes a weekday holiday under `weekend` rules and a half-day afternoon under `overnight` rules.
+  When the two disagree the run line says so. The hand-typed `keeper/market_calendar.py` remains only
+  as the fallback for when the flag is unreadable; it still has to be extended each year for that
+  fallback to stay complete.
 - **Cron drift.** GitHub Actions schedules are best-effort. The `timestamp_utc` column records when
   a reading was actually taken, so gaps and uneven spacing are visible in the data rather than
   hidden. Do not read this as five-minute precision, for the recorder or the keeper.
