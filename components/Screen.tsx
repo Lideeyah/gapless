@@ -266,7 +266,8 @@ export default function Screen() {
           const dCeiling = oCeiling !== null && h.price ? ((oCeiling - h.price) / h.price) * 100 : null;
           // read against whichever side is nearer
           const nearer = dFloor !== null && (dCeiling === null || Math.abs(dFloor) <= Math.abs(dCeiling)) ? "floor" : dCeiling !== null ? "ceiling" : null;
-          const distText = nearer === "floor" ? ` · ${fmtPct(dFloor!)} above floor` : nearer === "ceiling" ? ` · ${fmtPct(dCeiling!)} below ceiling` : "";
+          const pct = (x: number) => `${Math.abs(x).toFixed(2)}%`;
+          const distText = nearer === "floor" ? ` · ${pct(dFloor!)} ${dFloor! >= 0 ? "above" : "below"} the floor` : nearer === "ceiling" ? ` · ${pct(dCeiling!)} ${dCeiling! >= 0 ? "below" : "above"} the ceiling` : "";
           const onChainArmed = Boolean(h.delegate && KEEPER && h.delegate === KEEPER && BigInt(h.delegatedRaw) > 0n);
           return (
             <div className="row fade" key={h.tokenAccount} style={{ opacity: 1 }}>
@@ -312,10 +313,11 @@ export default function Screen() {
               <span className="num" style={{ fontSize: 28 }}>{o.quantity_raw}<br /><span className="mono secondary">raw units</span></span>
               <span className="num" style={{ fontSize: 28 }} >{o.fill_price_usd ? fmtUsd(Number(o.fill_price_usd)) : "—"}<br /><span className="mono secondary">fill{o.fills.length > 1 ? `, ${o.fills.length} parts` : ""}</span></span>
               <span>
-                {(f?.side === "ceiling" ? o.ceiling_price_usd : o.floor_price_usd) ? <><span className="num" style={{ fontSize: 28 }}>{fmtUsd(Number(f?.side === "ceiling" ? o.ceiling_price_usd : o.floor_price_usd))}</span><br /><span className="mono secondary">{f?.side === "ceiling" ? "ceiling" : "floor"}</span></> : <span className="num" style={{ fontSize: 28 }}>—</span>}
+                {(() => { const tp = f?.side === "ceiling" && Boolean(o.ceiling_price_usd); const edge = tp ? o.ceiling_price_usd : o.floor_price_usd; // recorded side only; orders armed before ceilings existed have neither and read as a stop
+                  return edge ? <><span className="num" style={{ fontSize: 28 }}>{fmtUsd(Number(edge))}</span><br /><span className="mono secondary">{tp ? "ceiling" : "floor"}</span></> : <span className="num" style={{ fontSize: 28 }}>—</span>; })()}
               </span>
               <span>
-                <span className={confirmingRevoke ? "" : "ox"}>filled</span><span className="secondary"> · {f?.kind ?? "stop"}{f ? ` · ${fmtTs(f.at)} · ${f.session}` : ""}</span>
+                <span className={confirmingRevoke ? "" : "ox"}>filled</span><span className="secondary"> · {f?.side === "ceiling" && o.ceiling_price_usd ? "take profit" : "stop"}{f ? ` · ${fmtTs(f.at)} · ${f.session}` : ""}</span>
                 <br />{o.fill_sig ? <a className="mono" href={solscanTx(o.fill_sig)} target="_blank" rel="noreferrer">{short(o.fill_sig)}</a> : <span className="mono secondary">no fill recorded</span>}
                 <span className="mono secondary"> · USDC sent to {short(o.owner_pubkey)}</span>
               </span>
@@ -348,7 +350,7 @@ export default function Screen() {
         ) : phase?.kind === "set" && phase.state === "confirm" && holding ? (
           <div className="fade">
             <p>Arm {hasFloor && hasCeiling ? <>a band from <span className="num" style={{ fontSize: 22 }}>{fmtUsd(floor)}</span> to <span className="num" style={{ fontSize: 22 }}>{fmtUsd(ceiling)}</span></> : hasCeiling ? <>a ceiling at <span className="num" style={{ fontSize: 22 }}>{fmtUsd(ceiling)}</span></> : <>a floor at <span className="num" style={{ fontSize: 22 }}>{fmtUsd(floor)}</span></>} on {qtyText} {sel}. Two signatures: an SPL approve delegating up to that quantity to the keeper, and a memo recording the order. Tokens stay in your wallet. Gapless holds a capped delegation you can revoke at any time. The issuer separately holds an uncapped permanent delegation over every account of this token, which Gapless neither controls nor can remove.</p>
-            {regime && <p className="secondary" style={{ paddingTop: 24 }}>Right now the recorder’s last reading is in the {lastSession} regime: {regime.confirmations} consecutive reading{regime.confirmations === 1 ? "" : "s"} {hasFloor && hasCeiling ? "outside the band" : hasCeiling ? "at or above the ceiling" : "at or below the floor"} and {regime.slippageBps} bps slippage tolerance{regime.splitOnImpact ? ", split across runs if price impact exceeds it" : ""}.</p>}
+            {regime && <p className="secondary" style={{ paddingTop: 24 }}>Right now the recorder’s last reading is in the {lastSession} regime: {regime.confirmations} consecutive reading{regime.confirmations === 1 ? "" : "s"} {hasFloor && hasCeiling ? "past the same edge" : hasCeiling ? "at or above the ceiling" : "at or below the floor"} and {regime.slippageBps} bps slippage tolerance{regime.splitOnImpact ? ", split across runs if price impact exceeds it" : ""}.</p>}
             <p style={{ paddingTop: 24 }}><button className="btn btn-primary" onClick={doSet}>sign and arm</button> <span className="faint"> · </span> <button className="btn btn-secondary" onClick={() => setPhase(null)}>back</button></p>
           </div>
         ) : (
