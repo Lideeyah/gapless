@@ -53,6 +53,7 @@ export default function Screen() {
   const [holdErr, setHoldErr] = useState<string | null>(null);
   const [sel, setSel] = useState<string>("NVDAx");
   const [floorText, setFloorText] = useState("");
+  const [ceilingText, setCeilingText] = useState("");
   const [qtyText, setQtyText] = useState("");
   const [phase, setPhase] = useState<Phase | null>(null);
   const [wantConnect, setWantConnect] = useState(false);
@@ -109,8 +110,12 @@ export default function Screen() {
   const live = orders.filter((o) => LIVE.includes(o.status));
   const fired = orders.filter((o) => o.status === "filled");
   const activeForSel = live.find((o) => o.ticker === sel) ?? null;
-  const floor = Number(floorText);
-  const floorForChart = activeForSel ? Number(activeForSel.floor_price_usd) : Number.isFinite(floor) && floor > 0 ? floor : null;
+  const floor = Number(floorText), ceiling = Number(ceilingText);
+  const num = (v: string | null | undefined) => (v ? Number(v) : null);
+  // the band drawn on the chart: the armed order's thresholds, else whatever is being typed
+  const floorForChart = activeForSel ? num(activeForSel.floor_price_usd) : Number.isFinite(floor) && floor > 0 ? floor : null;
+  const ceilingForChart = activeForSel ? num(activeForSel.ceiling_price_usd) : Number.isFinite(ceiling) && ceiling > 0 ? ceiling : null;
+  const bandWord = (o: { floor_price_usd: string | null; ceiling_price_usd?: string | null }) => (o.floor_price_usd && o.ceiling_price_usd ? "band" : o.ceiling_price_usd ? "ceiling" : "floor");
   const rows = history?.rows ?? [];
   const selMint = holdings?.find((h) => h.ticker === sel)?.mint ?? RECORDED[sel] ?? null;
   const lastSession = selMint && NO_MARKET.has(selMint) ? "closed" : history?.stats.currentSession ?? null;
@@ -122,10 +127,15 @@ export default function Screen() {
   useEffect(() => { if (holding && !qtyText) setQtyText(holding.uiString); }, [holding, qtyText]);
 
   // ------------------------------------------------------------------ actions
+  const hasFloor = floor > 0, hasCeiling = ceiling > 0;
   const setLabel = !connected ? "connect wallet to set a floor" : !storeOk ? "order store is not configured on the server" : !KEEPER ? "keeper delegate is not configured on the server"
-    : holdings === null ? "reading holdings" : !holding ? "hold an xStock to set a floor" : activeForSel ? `revoke the ${sel} floor before setting a new one` : !(floor > 0) ? "enter a floor to arm" : price !== null && floor >= price ? "floor is at or above the current price; it would fire on the next run" : null;
-  const canSet = setLabel === null || (setLabel?.startsWith("floor is at or above") ?? false);
-  const floorStr = floorText.replace(/\.$/, "");
+    : holdings === null ? "reading holdings" : !holding ? "hold an xStock to set a floor" : activeForSel ? `revoke the ${sel} ${bandWord(activeForSel)} before setting a new one`
+    : !hasFloor && !hasCeiling ? "enter a floor, a ceiling, or both" : hasFloor && hasCeiling && ceiling <= floor ? "the ceiling must be above the floor"
+    : price !== null && hasFloor && floor >= price ? "floor is at or above the current price; it would fire on the next run"
+    : price !== null && hasCeiling && ceiling <= price ? "ceiling is at or below the current price; it would fire on the next run" : null;
+  const canSet = setLabel === null || (setLabel?.startsWith("floor is at or above") ?? false) || (setLabel?.startsWith("ceiling is at or below") ?? false);
+  const floorStr = floorText.replace(/\.$/, ""), ceilingStr = ceilingText.replace(/\.$/, "");
+  const armLabel = hasFloor && hasCeiling ? "set the band" : hasCeiling ? "set ceiling" : "set floor";
 
   function describe(e: unknown): string {
     const err = e as { name?: string; message?: string; error?: { message?: string }; cause?: { message?: string }; logs?: string[] };
@@ -174,20 +184,24 @@ export default function Screen() {
   async function doSet() {
     if (!holding || !publicKey) return;
     try {
-      if (!/^\d+(\.\d+)?$/.test(qtyText) || !/^\d+(\.\d+)?$/.test(floorStr)) throw new Error("quantity and floor must be plain decimals");
+      if (!/^\d+(\.\d+)?$/.test(qtyText) || (hasFloor && !/^\d+(\.\d+)?$/.test(floorStr)) || (hasCeiling && !/^\d+(\.\d+)?$/.test(ceilingStr))) throw new Error("quantity, floor and ceiling must be plain decimals");
+      if (!hasFloor && !hasCeiling) throw new Error("set a floor, a ceiling, or both");
+      if (hasFloor && hasCeiling && ceiling <= floor) throw new Error("the ceiling must be above the floor");
+      const thresholds = { ...(hasFloor ? { floor_price_usd: floorStr } : {}), ...(hasCeiling ? { ceiling_price_usd: ceilingStr } : {}) };
       let raw = rawFromUi(qtyText, holding.decimals, holding.multiplier);
       if (qtyText === holding.uiString || raw > BigInt(holding.raw)) raw = BigInt(holding.raw); // full balance: use the exact on-chain amount
       if (raw <= 0n) throw new Error("quantity must be positive");
       const id = crypto.randomUUID();
       const delegate = new PublicKey(KEEPER);
       const approveSig = await confirmWith(new Transaction().add(createApproveCheckedInstruction(new PublicKey(holding.tokenAccount), new PublicKey(holding.mint), delegate, publicKey, raw, holding.decimals, [], TOKEN_2022_PROGRAM_ID)), "1 of 2 · approve delegation in Phantom");
-      const memo = JSON.stringify({ gapless: 1, id, mint: holding.mint, token_account: holding.tokenAccount, quantity_raw: raw.toString(), floor_price_usd: floorStr, delegate: KEEPER, delegation_sig: approveSig });
+      const memo = JSON.stringify({ gapless: 1, id, mint: holding.mint, token_account: holding.tokenAccount, quantity_raw: raw.toString(), ...thresholds, delegate: KEEPER, delegation_sig: approveSig });
       const orderSig = await confirmWith(new Transaction().add(new TransactionInstruction({ keys: [{ pubkey: publicKey, isSigner: true, isWritable: false }], programId: MEMO_PROGRAM, data: Buffer.from(memo, "utf8") })), "2 of 2 · sign the order record in Phantom");
       setPhase({ kind: "set", state: "inflight", step: "recording the order" });
-      const r = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, owner_pubkey: owner, ticker: holding.ticker, mint: holding.mint, token_account: holding.tokenAccount, decimals: holding.decimals, quantity_raw: raw.toString(), floor_price_usd: floorStr, delegation_sig: approveSig, order_sig: orderSig }) });
+      const r = await fetch("/api/orders", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, owner_pubkey: owner, ticker: holding.ticker, mint: holding.mint, token_account: holding.tokenAccount, decimals: holding.decimals, quantity_raw: raw.toString(), ...thresholds, delegation_sig: approveSig, order_sig: orderSig }) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
-      setPhase({ kind: "set", state: "done", detail: `armed at ${fmtUsd(Number(floorStr))}`, sigs: [approveSig, orderSig] });
+      setPhase({ kind: "set", state: "done", detail: `armed${hasFloor ? ` · floor ${fmtUsd(floor)}` : ""}${hasCeiling ? ` · ceiling ${fmtUsd(ceiling)}` : ""}`, sigs: [approveSig, orderSig] });
+      setCeilingText("");
       setFloorText(""); await Promise.all([loadOrders(), loadHoldings()]);
     } catch (e) { console.error(e); setPhase({ kind: "set", state: "error", detail: describe(e) }); }
   }
@@ -233,13 +247,13 @@ export default function Screen() {
           ))}
         </div>
         {histErr ? <p className="secondary">Could not read data/prices.csv: {histErr}</p>
-          : <Timeline rows={rows} ticker={sel} floor={floorForChart} firstAt={history?.stats.firstAt ?? null} lastAt={history?.stats.lastAt ?? null} />}
+          : <Timeline rows={rows} ticker={sel} floor={floorForChart} ceiling={ceilingForChart} firstAt={history?.stats.firstAt ?? null} lastAt={history?.stats.lastAt ?? null} />}
       </section>
 
       <div style={{ height: 48 }} />
 
       <section>
-        <div className="row head mono secondary"><span>ticker</span><span>quantity</span><span>current price</span><span>floor</span><span>status</span></div>
+        <div className="row head mono secondary"><span>ticker</span><span>quantity</span><span>current price</span><span>floor · ceiling</span><span>status</span></div>
         {!isConnected && <div className="row"><span className="secondary" style={{ gridColumn: "1 / -1" }}>Connect a wallet to see holdings. Balances are read from the chain; nothing is deposited.</span></div>}
         {isConnected && holdErr && <div className="row"><span className="secondary" style={{ gridColumn: "1 / -1" }}>Could not read token accounts from the RPC: {holdErr}</span></div>}
         {isConnected && holdings && holdings.length === 0 && live.length === 0 && fired.length === 0 && (
@@ -247,14 +261,25 @@ export default function Screen() {
         )}
         {holdings?.map((h) => {
           const o = live.find((x) => x.token_account === h.tokenAccount) ?? null;
-          const dist = o && h.price ? ((h.price - Number(o.floor_price_usd)) / h.price) * 100 : null;
+          const oFloor = o ? num(o.floor_price_usd) : null, oCeiling = o ? num(o.ceiling_price_usd) : null;
+          const dFloor = oFloor !== null && h.price ? ((h.price - oFloor) / h.price) * 100 : null;
+          const dCeiling = oCeiling !== null && h.price ? ((oCeiling - h.price) / h.price) * 100 : null;
+          // read against whichever side is nearer
+          const nearer = dFloor !== null && (dCeiling === null || Math.abs(dFloor) <= Math.abs(dCeiling)) ? "floor" : dCeiling !== null ? "ceiling" : null;
+          const pct = (x: number) => `${Math.abs(x).toFixed(2)}%`;
+          const distText = nearer === "floor" ? ` · ${pct(dFloor!)} ${dFloor! >= 0 ? "above" : "below"} the floor` : nearer === "ceiling" ? ` · ${pct(dCeiling!)} ${dCeiling! >= 0 ? "below" : "above"} the ceiling` : "";
           const onChainArmed = Boolean(h.delegate && KEEPER && h.delegate === KEEPER && BigInt(h.delegatedRaw) > 0n);
           return (
             <div className="row fade" key={h.tokenAccount} style={{ opacity: 1 }}>
               <span><span className="num" style={{ fontSize: 28 }}>{h.ticker}</span><br /><span className="mono secondary">{short(h.mint)}</span></span>
               <span className="num" style={{ fontSize: 28 }}>{fmtQty(h.ui)}</span>
               <span className="num" style={{ fontSize: 28 }}>{h.price === null ? "—" : fmtUsd(h.price)}</span>
-              <span className="num" style={{ fontSize: 28, color: o ? "#1F4D3D" : undefined }}>{o ? fmtUsd(Number(o.floor_price_usd)) : "—"}</span>
+              <span>
+                {oFloor !== null && <><span className="num green" style={{ fontSize: 28 }}>{fmtUsd(oFloor)}</span><br /><span className="mono secondary">floor</span></>}
+                {oFloor !== null && oCeiling !== null && <br />}
+                {oCeiling !== null && <><span className="num green" style={{ fontSize: 28 }}>{fmtUsd(oCeiling)}</span><br /><span className="mono secondary">ceiling</span></>}
+                {!o && <span className="num" style={{ fontSize: 28 }}>—</span>}
+              </span>
               <span>
                 {o ? (
                   <>
@@ -268,12 +293,12 @@ export default function Screen() {
                     {!o.blocked && o.pyth_check && (o.status === "triggered" || o.status === "executing") && <><br /><span className="mono secondary">second witness {o.pyth_check.status === "agree" ? `agreed: Pyth ${o.pyth_check.reference} ${fmtUsd(Number(o.pyth_check.pyth_price_usd))}, ${o.pyth_check.divergence_bps} bps from the execution price` : o.pyth_check.status === "market_closed" ? `not consulted: Pyth ${o.pyth_check.reference} is frozen while the NYSE is shut` : o.pyth_check.status === "not_entitled" ? "not consulted: no Pyth entitlement for this asset" : o.pyth_check.status} · {fmtTs(o.pyth_check.checked_at)}</span></>}
                     {o.multiplier_event && <><br /><span className="mono secondary">issuer multiplier changed {o.multiplier_event.old_multiplier} → {o.multiplier_event.new_multiplier} at {fmtTs(o.multiplier_event.detected_at)} · deciding split or dividend on the next reading; nothing evaluated until then</span></>}
                     {(o.rebases ?? []).map((r) => <span key={r.at}><br /><span className="mono secondary">{r.kind === "split"
-                      ? `split: floor rebased ${fmtUsd(Number(r.old_floor))} → ${fmtUsd(Number(r.new_floor))} on ${fmtTs(r.at)} · issuer multiplier ${r.old_multiplier} → ${r.new_multiplier} · price moved ${r.pre_price_usd ? fmtUsd(Number(r.pre_price_usd)) : "—"} → ${fmtUsd(Number(r.post_price_usd))}`
-                      : `dividend accrual on ${fmtTs(r.at)}: issuer multiplier ${r.old_multiplier} → ${r.new_multiplier}, price ${r.pre_price_usd ? fmtUsd(Number(r.pre_price_usd)) : "—"} → ${fmtUsd(Number(r.post_price_usd))}, floor left at ${fmtUsd(Number(r.new_floor))}`}</span></span>)}
-                    <span className="secondary">{dist === null ? "" : ` · ${fmtPct(dist)} above floor`}</span>
+                      ? `split on ${fmtTs(r.at)}:${r.old_floor ? ` floor rebased ${fmtUsd(Number(r.old_floor))} → ${fmtUsd(Number(r.new_floor))}` : ""}${r.old_ceiling ? ` · ceiling ${r.ceiling_note ? `left at ${fmtUsd(Number(r.old_ceiling))} (${r.ceiling_note})` : `rebased ${fmtUsd(Number(r.old_ceiling))} → ${fmtUsd(Number(r.new_ceiling))}`}` : ""} · issuer multiplier ${r.old_multiplier} → ${r.new_multiplier} · price moved ${r.pre_price_usd ? fmtUsd(Number(r.pre_price_usd)) : "—"} → ${fmtUsd(Number(r.post_price_usd))}`
+                      : `dividend accrual on ${fmtTs(r.at)}: issuer multiplier ${r.old_multiplier} → ${r.new_multiplier}, price ${r.pre_price_usd ? fmtUsd(Number(r.pre_price_usd)) : "—"} → ${fmtUsd(Number(r.post_price_usd))}${r.old_floor ? `, floor left at ${fmtUsd(Number(r.new_floor))}` : ""}${r.old_ceiling ? `, ceiling left at ${fmtUsd(Number(r.new_ceiling))}` : ""}`}</span></span>)}
+                    <span className="secondary">{distText}</span>
                     <br /><span className="mono secondary">{onChainArmed ? `delegated ${h.delegatedRaw} raw on chain · ${o.breach_count} consecutive breach${o.breach_count === 1 ? "" : "es"}` : "delegation not visible on chain yet"}</span>
                     {o.last_decision ? <><br /><span className="mono secondary">{fmtTs(o.last_checked_at)} · {o.last_decision}</span></> : <><br /><span className="mono secondary">not yet checked by the keeper</span></>}
-                    {closedLow !== null && h.ticker === sel ? <><br /><span className="mono secondary">closed-hours low in window {fmtUsd(closedLow)}{closedLow <= Number(o.floor_price_usd) ? " · reached this floor" : " · stayed above this floor"}</span></> : null}
+                    {closedLow !== null && h.ticker === sel ? <><br /><span className="mono secondary">closed-hours low in window {fmtUsd(closedLow)}{oFloor === null ? "" : closedLow <= oFloor ? " · reached this floor" : " · stayed above this floor"}</span></> : null}
                   </>
                 ) : <span className="secondary">no floor set</span>}
               </span>
@@ -287,9 +312,12 @@ export default function Screen() {
               <span><span className="num" style={{ fontSize: 28 }}>{o.ticker}</span><br /><span className="mono secondary">{short(o.mint)}</span></span>
               <span className="num" style={{ fontSize: 28 }}>{o.quantity_raw}<br /><span className="mono secondary">raw units</span></span>
               <span className="num" style={{ fontSize: 28 }} >{o.fill_price_usd ? fmtUsd(Number(o.fill_price_usd)) : "—"}<br /><span className="mono secondary">fill{o.fills.length > 1 ? `, ${o.fills.length} parts` : ""}</span></span>
-              <span className="num" style={{ fontSize: 28 }}>{fmtUsd(Number(o.floor_price_usd))}</span>
               <span>
-                <span className={confirmingRevoke ? "" : "ox"}>filled</span><span className="secondary"> · {f ? `${fmtTs(f.at)} · ${f.session}` : ""}</span>
+                {(() => { const tp = f?.side === "ceiling" && Boolean(o.ceiling_price_usd); const edge = tp ? o.ceiling_price_usd : o.floor_price_usd; // recorded side only; orders armed before ceilings existed have neither and read as a stop
+                  return edge ? <><span className="num" style={{ fontSize: 28 }}>{fmtUsd(Number(edge))}</span><br /><span className="mono secondary">{tp ? "ceiling" : "floor"}</span></> : <span className="num" style={{ fontSize: 28 }}>—</span>; })()}
+              </span>
+              <span>
+                <span className={confirmingRevoke ? "" : "ox"}>filled</span><span className="secondary"> · {f?.side === "ceiling" && o.ceiling_price_usd ? "take profit" : "stop"}{f ? ` · ${fmtTs(f.at)} · ${f.session}` : ""}</span>
                 <br />{o.fill_sig ? <a className="mono" href={solscanTx(o.fill_sig)} target="_blank" rel="noreferrer">{short(o.fill_sig)}</a> : <span className="mono secondary">no fill recorded</span>}
                 <span className="mono secondary"> · USDC sent to {short(o.owner_pubkey)}</span>
               </span>
@@ -316,24 +344,25 @@ export default function Screen() {
           </div>
         ) : confirmingRevoke && activeForSel ? (
           <div className="fade">
-            <p>Remove the {sel} floor at {fmtUsd(Number(activeForSel.floor_price_usd))}? This signs an SPL revoke; the keeper can no longer move these tokens.</p>
+            <p>Remove the {sel} {bandWord(activeForSel)}{activeForSel.floor_price_usd ? `, floor ${fmtUsd(Number(activeForSel.floor_price_usd))}` : ""}{activeForSel.ceiling_price_usd ? `, ceiling ${fmtUsd(Number(activeForSel.ceiling_price_usd))}` : ""}? This signs an SPL revoke; the keeper can no longer move these tokens.</p>
             <p style={{ paddingTop: 24 }}><button className="btn btn-destructive" onClick={() => doRevoke(activeForSel)}>revoke delegation</button> <span className="faint"> · </span> <button className="btn btn-secondary" onClick={() => setPhase(null)}>keep it</button></p>
           </div>
         ) : phase?.kind === "set" && phase.state === "confirm" && holding ? (
           <div className="fade">
-            <p>Arm a floor at <span className="num" style={{ fontSize: 22 }}>{fmtUsd(floor)}</span> on {qtyText} {sel}. Two signatures: an SPL approve delegating up to that quantity to the keeper, and a memo recording the order. Tokens stay in your wallet. Gapless holds a capped delegation you can revoke at any time. The issuer separately holds an uncapped permanent delegation over every account of this token, which Gapless neither controls nor can remove.</p>
-            {regime && <p className="secondary" style={{ paddingTop: 24 }}>Right now the recorder’s last reading is in the {lastSession} regime: {regime.confirmations} consecutive reading{regime.confirmations === 1 ? "" : "s"} at or below the floor and {regime.slippageBps} bps slippage tolerance{regime.splitOnImpact ? ", split across runs if price impact exceeds it" : ""}.</p>}
+            <p>Arm {hasFloor && hasCeiling ? <>a band from <span className="num" style={{ fontSize: 22 }}>{fmtUsd(floor)}</span> to <span className="num" style={{ fontSize: 22 }}>{fmtUsd(ceiling)}</span></> : hasCeiling ? <>a ceiling at <span className="num" style={{ fontSize: 22 }}>{fmtUsd(ceiling)}</span></> : <>a floor at <span className="num" style={{ fontSize: 22 }}>{fmtUsd(floor)}</span></>} on {qtyText} {sel}. Two signatures: an SPL approve delegating up to that quantity to the keeper, and a memo recording the order. Tokens stay in your wallet. Gapless holds a capped delegation you can revoke at any time. The issuer separately holds an uncapped permanent delegation over every account of this token, which Gapless neither controls nor can remove.</p>
+            {regime && <p className="secondary" style={{ paddingTop: 24 }}>Right now the recorder’s last reading is in the {lastSession} regime: {regime.confirmations} consecutive reading{regime.confirmations === 1 ? "" : "s"} {hasFloor && hasCeiling ? "past the same edge" : hasCeiling ? "at or above the ceiling" : "at or below the floor"} and {regime.slippageBps} bps slippage tolerance{regime.splitOnImpact ? ", split across runs if price impact exceeds it" : ""}.</p>}
             <p style={{ paddingTop: 24 }}><button className="btn btn-primary" onClick={doSet}>sign and arm</button> <span className="faint"> · </span> <button className="btn btn-secondary" onClick={() => setPhase(null)}>back</button></p>
           </div>
         ) : (
-          <div className="fade" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.6fr", gap: 24, alignItems: "end" }}>
-            <label><span className="mono secondary">floor, USD</span><input inputMode="decimal" placeholder={price !== null ? `below ${fmtUsd(price)}` : "0.00"} value={floorText} onChange={(e) => setFloorText(e.target.value.replace(/[^0-9.]/g, ""))} disabled={!holding} /></label>
+          <div className="fade" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1.6fr", gap: 24, alignItems: "end" }}>
+            <label><span className="mono secondary">floor, USD</span><input inputMode="decimal" placeholder={price !== null ? `below ${fmtUsd(price)}` : "optional"} value={floorText} onChange={(e) => setFloorText(e.target.value.replace(/[^0-9.]/g, ""))} disabled={!holding} /></label>
+            <label><span className="mono secondary">ceiling, USD</span><input inputMode="decimal" placeholder={price !== null ? `above ${fmtUsd(price)}` : "optional"} value={ceilingText} onChange={(e) => setCeilingText(e.target.value.replace(/[^0-9.]/g, ""))} disabled={!holding} /></label>
             <label><span className="mono secondary">quantity, {sel}</span><input inputMode="decimal" placeholder={holding ? fmtQty(holding.ui) : "0"} value={qtyText} onChange={(e) => setQtyText(e.target.value.replace(/[^0-9.]/g, ""))} disabled={!holding} /></label>
             <div>
               {activeForSel && connected
-                ? <button className="btn btn-secondary" onClick={() => setPhase({ kind: "revoke", state: "confirm" })}>revoke the {sel} floor</button>
-                : activeForSel ? <button className="btn btn-disabled" disabled>read-only: connect this wallet to change its floor</button>
-                : canSet ? <button className="btn btn-primary" onClick={() => setPhase({ kind: "set", state: "confirm" })}>set floor</button>
+                ? <button className="btn btn-secondary" onClick={() => setPhase({ kind: "revoke", state: "confirm" })}>revoke the {sel} {bandWord(activeForSel)}</button>
+                : activeForSel ? <button className="btn btn-disabled" disabled>read-only: connect this wallet to change its {bandWord(activeForSel)}</button>
+                : canSet ? <button className="btn btn-primary" onClick={() => setPhase({ kind: "set", state: "confirm" })}>{armLabel}</button>
                 : <button className="btn btn-disabled" disabled>{setLabel}</button>}
               {canSet && setLabel && <p className="mono secondary" style={{ paddingTop: 8 }}>{setLabel}</p>}
             </div>
