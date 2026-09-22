@@ -279,7 +279,7 @@
       "ceiling_price_usd": "233",
       "status": "armed",
       "breach_count": 0,
-      "last_checked_at": null,
+      "last_checked_at": "2026-09-22T11:10:00Z",
       "delegation_sig": "2W8hWqnyiRHm6f37kX16iB5vVatwBwGoFCdF3JobD35kygs3DJDGF43HgWUSmyv2CECWYVSJTA55cTXdk2gdzzSR",
       "fill_sig": null,
       "fill_price_usd": null,
@@ -290,9 +290,9 @@
       "delegate": "HbJ7XbcY2VsunoeK9v6o3FwKGvwfTBQ7horU9d3fonKs",
       "remaining_raw": "882621",
       "fills": [],
-      "last_decision": null,
-      "last_session": null,
-      "last_price_usd": null,
+      "last_decision": "hold: 226.9914 is above floor 215",
+      "last_session": "overnight",
+      "last_price_usd": "226.99140716977908",
       "pending_sig": null,
       "pending_amount_raw": null,
       "pending_since": null,
@@ -300,7 +300,8 @@
       "multiplier": "1.001701196801074",
       "rebases": [],
       "blocked": null,
-      "multiplier_event": null
+      "multiplier_event": null,
+      "last_session_source": "pyth"
     }
   ]
 }
