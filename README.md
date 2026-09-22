@@ -20,7 +20,7 @@ Order memo: https://solscan.io/tx/5rDdesSXqoCPggGhdfZ3EW5aHEaqNfNo11dzHjxSxHP3ZM
 
 **The app:** https://gapless-market.vercel.app/app. The landing page at https://gapless-market.vercel.app reads `data/prices.csv` on every request.
 
-**The videos:** a three-minute demo film and a five-minute technical walkthrough, supplied with the submission.
+**The videos:** pitch, three minutes: https://youtu.be/ekEbz6FhG2g. Technical walkthrough, five minutes: https://youtu.be/SP3AsOalG5Y
 
 **The keeper's address:** `HbJ7XbcY2VsunoeK9v6o3FwKGvwfTBQ7horU9d3fonKs`. Every decision it makes is a commit to `data/orders.json` in this repository.
 
@@ -393,4 +393,4 @@ Secrets: `KEEPER_SECRET_KEY` (repository secret, the keeper's key from `keeper/g
 
 ## Licence
 
-No licence file is in this repository yet. Until one is added, all rights are reserved by the author.
+MIT. See [`LICENSE`](LICENSE). Copyright 2026 Lydia Solomon.
