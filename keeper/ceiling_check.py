@@ -161,5 +161,14 @@ f = Fake(); f.price = Decimal("220"); o, _ = cycle(f, order(floor_price_usd=None
 change(f, "10.017011968010740"); o2, _ = cycle(f, *o, session="open"); f.price = Decimal("22"); o3, log3 = cycle(f, *o2, session="open")
 check("3h ceiling-only order, split seen: ceiling 240 -> 24, no floor invented", o3[0]["ceiling_price_usd"] == "24.000000" and o3[0]["floor_price_usd"] is None and o3[0]["rebases"][-1]["old_floor"] is None, log3[-1])
 
+# 3i the case stated explicitly: a CONFIRMED 2-for-1 (price halves, next reading matches the ratio) rebases BOTH edges by the ratio
+f = Fake(); f.price = Decimal("220"); o, _ = cycle(f, order(), session="open")
+change(f, "2.003402393602148"); o2, log2 = cycle(f, *o, session="open")          # change cycle: nothing evaluated
+f.price = Decimal("110"); o3, log3 = cycle(f, *o2, session="open"); r = o3[0]["rebases"][-1]   # price halved: confirmed split
+check("3i confirmed 2-for-1: floor 200 -> 100 AND ceiling 240 -> 120, band width halves with the price, still armed at 110",
+      r["kind"] == "split" and o3[0]["floor_price_usd"] == "100.000000" and o3[0]["ceiling_price_usd"] == "120.000000" and o3[0]["status"] == "armed" and "ceiling_note" not in r, f"{log3[-1]}")
+f.price = Decimal("121"); o4, log4 = cycle(f, *o3, session="open", dry=True)
+check("3i' after the confirmed 2-for-1 the rebased ceiling is live: 121 trips it (open, 1 confirmation)", o4[0]["status"] == "triggered" and o4[0]["triggered_side"] == "ceiling", dec(log4[-2]))
+
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} passed")
 sys.exit(0 if all(ok for _, ok in results) else 1)
