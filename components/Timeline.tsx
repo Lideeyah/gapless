@@ -5,7 +5,7 @@ import { fmtTs, fmtUsd } from "@/lib/format";
 export type Row = { t: string; ticker: string; price: number | null; session: "open" | "overnight" | "weekend" | "closed" };
 const CADENCE = 5 * 60 * 1000, GAP = 3 * CADENCE, MIN_READINGS = 20;
 
-export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minReadings = MIN_READINGS }: { rows: Row[]; ticker: string; floor: number | null; firstAt: string | null; lastAt: string | null; minReadings?: number }) {
+export default function Timeline({ rows, ticker, floor, ceiling = null, firstAt, lastAt, minReadings = MIN_READINGS }: { rows: Row[]; ticker: string; floor: number | null; ceiling?: number | null; firstAt: string | null; lastAt: string | null; minReadings?: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(1120);
   useEffect(() => {
@@ -23,6 +23,7 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minRead
     const priced = series.filter((r) => r.price !== null).map((r) => r.price!);
     let lo = Math.min(...priced), hi = Math.max(...priced);
     if (floor !== null && Number.isFinite(floor)) { lo = Math.min(lo, floor); hi = Math.max(hi, floor); }
+    if (ceiling !== null && Number.isFinite(ceiling)) { lo = Math.min(lo, ceiling); hi = Math.max(hi, ceiling); }
     if (!Number.isFinite(lo) || !Number.isFinite(hi)) { lo = 0; hi = 1; }
     const pad = Math.max((hi - lo) * 0.15, hi * 0.002);
     lo = Math.max(0, lo - pad); hi += pad; // a price axis never goes below zero
@@ -70,7 +71,7 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minRead
       prev = { ms };
     }
     return { x, y, lo, hi, bands, marks, holes, d, readings: series.length, priced: priced.length, end: lastPriced ? { x: x(Date.parse(lastPriced.t)), y: y(lastPriced.price!), p: lastPriced.price! } : null };
-  }, [rows, series, w, floor, firstAt, lastAt]);
+  }, [rows, series, w, floor, ceiling, firstAt, lastAt]);
 
   const tooShort = model.priced < minReadings;
   return (
@@ -106,23 +107,30 @@ export default function Timeline({ rows, ticker, floor, firstAt, lastAt, minRead
               <text x={m.anchorEnd ? m.x - 4 : m.x + 4} y={h - bottom + 28} textAnchor={m.anchorEnd ? "end" : "start"} fill="#14161A" opacity={0.6} fontSize={12} fontFamily="var(--font-mono), monospace">{m.label}</text>
             </g>
           ))}
-          {floor !== null && Number.isFinite(floor) && (
-            <g>
-              <line x1={padL} x2={w - padR} y1={model.y(floor)} y2={model.y(floor)} stroke="#F4F1EA" strokeWidth={3} opacity={0.9} />
-              <line x1={padL} x2={w - padR} y1={model.y(floor)} y2={model.y(floor)} stroke="#1F4D3D" strokeWidth={1} opacity={0.3} />
-            </g>
+          {floor !== null && ceiling !== null && Number.isFinite(floor) && Number.isFinite(ceiling) && ceiling > floor && (
+            // the band: between the two thresholds nothing happens. Green at 6%, the weight the design already uses for the faintest ink wash.
+            <rect x={padL} y={model.y(ceiling)} width={w - padL - padR} height={Math.max(0, model.y(floor) - model.y(ceiling))} fill="#1F4D3D" opacity={0.06} />
           )}
+          {[floor, ceiling].map((t, i) => t !== null && Number.isFinite(t) ? (
+            <g key={i}>
+              <line x1={padL} x2={w - padR} y1={model.y(t)} y2={model.y(t)} stroke="#F4F1EA" strokeWidth={3} opacity={0.9} />
+              <line x1={padL} x2={w - padR} y1={model.y(t)} y2={model.y(t)} stroke="#1F4D3D" strokeWidth={1} opacity={0.3} />
+            </g>
+          ) : null)}
           <path d={model.d} fill="none" stroke="#F4F1EA" strokeWidth={2.25} strokeOpacity={0.7} strokeLinejoin="round" strokeLinecap="round" pathLength={1} className="draw" />
           <path d={model.d} fill="none" stroke="#1F4D3D" strokeWidth={1.25} strokeLinejoin="round" strokeLinecap="round" pathLength={1} className="draw" />
           {model.end && (<g><circle cx={model.end.x} cy={model.end.y} r={2.5} fill="#1F4D3D" stroke="#F4F1EA" strokeWidth={1.5} /><text x={model.end.x + 10} y={model.end.y + 4} textAnchor="start" fill="#1F4D3D" fontSize={13} fontFamily="var(--font-mono), monospace">{fmtUsd(model.end.p)}</text></g>)}
           
           <text x={w - padR} y={top - 8} textAnchor="end" fill="#14161A" opacity={0.6} fontSize={12} fontFamily="var(--font-mono), monospace">high {fmtUsd(model.hi)} · low {fmtUsd(model.lo)}</text>
           {floor !== null && Number.isFinite(floor) && (
-            <text x={w - padR} y={model.y(floor) - 6} textAnchor="end" fill="#1F4D3D" fontSize={13} fontFamily="var(--font-mono), monospace" paintOrder="stroke" stroke="#F4F1EA" strokeWidth={3}>floor {fmtUsd(floor)}</text>
+            <text x={w - padR} y={model.y(floor) + 16} textAnchor="end" fill="#1F4D3D" fontSize={13} fontFamily="var(--font-mono), monospace" paintOrder="stroke" stroke="#F4F1EA" strokeWidth={3}>floor {fmtUsd(floor)}</text>
+          )}
+          {ceiling !== null && Number.isFinite(ceiling) && (
+            <text x={w - padR} y={model.y(ceiling) - 6} textAnchor="end" fill="#1F4D3D" fontSize={13} fontFamily="var(--font-mono), monospace" paintOrder="stroke" stroke="#F4F1EA" strokeWidth={3}>ceiling {fmtUsd(ceiling)}</text>
           )}
         </svg>
       )}
-      <div className="mono faint" style={{ lineHeight: "24px" }}>paper: open · ink 30%: overnight · ink: weekend, or no market session at all · holes are missing readings · session labels are the recorder’s own</div>
+      <div className="mono faint" style={{ lineHeight: "24px" }}>paper: open · ink 30%: overnight · ink: weekend, or no market session at all · holes are missing readings · session labels are the recorder’s own{ceiling !== null && floor !== null ? " · green lines: floor and ceiling, the wash between them is the band where nothing happens" : ""}</div>
     </div>
   );
 }

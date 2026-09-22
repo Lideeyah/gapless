@@ -269,6 +269,29 @@ def mint_state(mint):
 SPLIT_MIN_LOG_RATIO = Decimal("0.01")  # a multiplier change under ~1% is dividend accrual by construction; no split is that small
 
 
+def thresholds(o):
+    """(floor, ceiling) as Decimals, either may be None. An order carries a floor, a ceiling, or both."""
+    f, c = o.get("floor_price_usd"), o.get("ceiling_price_usd")
+    return (Decimal(f) if f not in (None, "") else None, Decimal(c) if c not in (None, "") else None)
+
+
+def side_of(o, price):
+    """Which side of the band a reading is on: 'floor' (at or below), 'ceiling' (at or above), or None (inside)."""
+    floor, ceiling = thresholds(o)
+    if floor is not None and price <= floor:
+        return "floor"
+    if ceiling is not None and price >= ceiling:
+        return "ceiling"
+    return None
+
+
+def band_text(o):
+    floor, ceiling = thresholds(o)
+    if floor is not None and ceiling is not None:
+        return f"band {floor} to {ceiling}"
+    return f"floor {floor}" if floor is not None else f"ceiling {ceiling}"
+
+
 def classify_multiplier_event(o, price):
     """Second reading after a multiplier change. Decide split vs accrual from the displayed price, then settle the floor.
 
@@ -278,20 +301,33 @@ def classify_multiplier_event(o, price):
     ev = o["multiplier_event"]
     ratio = Decimal(ev["old_multiplier"]) / Decimal(ev["new_multiplier"])
     pre = Decimal(ev["pre_price_usd"]) if ev.get("pre_price_usd") and Decimal(ev["pre_price_usd"]) > 0 else None
-    old_floor = Decimal(o["floor_price_usd"])
-    kind = "accrual"
+    old_floor, old_ceiling = thresholds(o)
+    kind, assumed = "accrual", False
     if abs(ratio.ln()) >= SPLIT_MIN_LOG_RATIO:
         if pre is None:
-            kind = "split"  # no pre-change price to compare against: assume the dangerous case, which keeps the floor meaningful
+            kind, assumed = "split", True  # no pre-change price to compare against: assume the dangerous case, which keeps the floor meaningful
         else:
             d_split = abs((price / (pre * ratio)).ln())
             d_flat = abs((price / pre).ln())
             kind = "split" if d_split < d_flat else "accrual"
     entry = {"at": now_iso(), "kind": kind, "old_multiplier": ev["old_multiplier"], "new_multiplier": ev["new_multiplier"],
-             "pre_price_usd": ev.get("pre_price_usd"), "post_price_usd": str(price), "old_floor": str(old_floor), "new_floor": str(old_floor)}
+             "pre_price_usd": ev.get("pre_price_usd"), "post_price_usd": str(price),
+             "old_floor": None if old_floor is None else str(old_floor), "new_floor": None if old_floor is None else str(old_floor),
+             "old_ceiling": None if old_ceiling is None else str(old_ceiling), "new_ceiling": None if old_ceiling is None else str(old_ceiling)}
     if kind == "split":
-        new_floor = (old_floor * ratio).quantize(Decimal("0.000001"))
-        o["floor_price_usd"], entry["new_floor"] = str(new_floor), str(new_floor)
+        # A split moves the displayed price by the ratio, so both thresholds move by the ratio to mean the same thing.
+        # The one asymmetry: a split that is only *assumed* (no pre-change price on record) is allowed to lower the floor,
+        # which can only make a sale less likely, but is not allowed to lower the ceiling, which would make a sale more
+        # likely on an assumption. Erring toward keeping the position holds on both sides.
+        if old_floor is not None:
+            new_floor = (old_floor * ratio).quantize(Decimal("0.000001"))
+            o["floor_price_usd"], entry["new_floor"] = str(new_floor), str(new_floor)
+        if old_ceiling is not None:
+            if assumed and ratio < 1:
+                entry["ceiling_note"] = "split assumed, not seen: ceiling left where it was rather than lowered on an assumption"
+            else:
+                new_ceiling = (old_ceiling * ratio).quantize(Decimal("0.000001"))
+                o["ceiling_price_usd"], entry["new_ceiling"] = str(new_ceiling), str(new_ceiling)
     o.setdefault("rebases", []).append(entry)
     o["multiplier_event"] = None
     return entry
@@ -317,7 +353,7 @@ def guard_mint(o, tag):
         else:
             o["multiplier_event"] = {"detected_at": now_iso(), "old_multiplier": stored, "new_multiplier": st["multiplier"],
                                      "pre_price_usd": o.get("last_price_usd"), "changes": 1}
-        o["multiplier"], o["breach_count"] = st["multiplier"], 0
+        o["multiplier"], o["breach_count"], o["breach_side"], o["triggered_side"] = st["multiplier"], 0, None, None
         if o["status"] == "triggered":
             o["status"] = "armed"  # a trigger counted before the change means nothing after it
         o["blocked"] = None
@@ -503,13 +539,15 @@ def send_and_confirm(raw, sig):
 
 
 def record_fill(o, sig, amount, out_raw, multiplier, session):
+    side = o.get("triggered_side") or "floor"
     o.setdefault("fills", []).append({"at": now_iso(), "signature": sig, "in_raw": str(amount), "out_usdc_raw": str(out_raw),
-                                      "fill_price_usd": fill_price(out_raw, amount, int(o["decimals"]), multiplier), "session": session})
+                                      "fill_price_usd": fill_price(out_raw, amount, int(o["decimals"]), multiplier), "session": session,
+                                      "side": side, "kind": "stop" if side == "floor" else "take profit"})
     o["remaining_raw"] = str(int(o["remaining_raw"]) - int(amount))
     assert int(o["remaining_raw"]) >= 0, "executed more than delegated"  # invariant 4
     o["fill_sig"], o["fill_price_usd"], o["filled_at"] = sig, o["fills"][-1]["fill_price_usd"], o["fills"][-1]["at"]
     o["status"] = "filled" if int(o["remaining_raw"]) == 0 else "armed"
-    o["breach_count"] = 0  # a remainder must earn its own confirmations before the next slice
+    o["breach_count"], o["breach_side"], o["triggered_side"] = 0, None, None  # a remainder must earn its own confirmations before the next slice
     o["pending_sig"] = o["pending_amount_raw"] = o["pending_since"] = o["pending_last_valid_block_height"] = o["pending_multiplier"] = None
     o["failure_reason"] = None
 
@@ -527,7 +565,7 @@ def settle_pending(o, session):
         if out is None:
             return f"landed: {sig} is confirmed but its balance change is not servable yet; fill not recorded until it is"
         record_fill(o, sig, int(amount), out, Decimal(o.get("pending_multiplier") or 1), session)
-        return f"{o['status']}: {amount} raw sold at {o['fill_price_usd']} USDC, signature {sig}"
+        return f"{o['status']} ({o['fills'][-1]['kind']}): {amount} raw sold at {o['fill_price_usd']} USDC, signature {sig}"
     if st == "failed":
         o["status"], o["failure_reason"] = "failed", f"transaction {sig} failed on chain"
     else:
@@ -544,19 +582,21 @@ def settle_pending(o, session):
 
 
 def order_tag(o):
-    return f"[{o['id'][:8]} {o['ticker']} floor={o['floor_price_usd']}]"
+    f, c = o.get("floor_price_usd"), o.get("ceiling_price_usd")
+    return f"[{o['id'][:8]} {o['ticker']}" + (f" floor={f}" if f not in (None, "") else "") + (f" ceiling={c}" if c not in (None, "") else "") + "]"
 
 
-def count_breach(o, session, now_ts):
-    """Consecutive readings at or below the floor, within one regime and within BREACH_WINDOW_S.
-    A missing reading never resets the count; a regime change or a stale sequence does."""
+def count_breach(o, session, now_ts, side="floor"):
+    """Consecutive readings beyond the same threshold (at or below the floor, or at or above the ceiling), within one
+    regime and within BREACH_WINDOW_S. A missing reading never resets the count; a regime change, a stale sequence, or
+    a reading beyond the other side of the band does."""
     last_at = o.get("breach_last_at")
     last_ts = datetime.strptime(last_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp() if last_at else None
     stale = last_ts is not None and now_ts - last_ts > BREACH_WINDOW_S
-    if o.get("breach_session") != session or stale or not o.get("breach_count"):
+    if o.get("breach_session") != session or stale or not o.get("breach_count") or o.get("breach_side", "floor") != side:
         o["breach_count"] = 0
     o["breach_count"] = int(o["breach_count"]) + 1
-    o["breach_session"], o["breach_last_at"] = session, now_iso()
+    o["breach_session"], o["breach_last_at"], o["breach_side"] = session, now_iso(), side
 
 
 def run():
@@ -626,20 +666,24 @@ def run():
             if o.get("multiplier_event"):
                 ev = classify_multiplier_event(o, price)
                 log(f"{tag} multiplier change classified as {ev['kind']}: price {ev['pre_price_usd']} -> {ev['post_price_usd']} against ratio "
-                    f"{Decimal(ev['old_multiplier']) / Decimal(ev['new_multiplier']):.6f}; floor {ev['old_floor']} -> {ev['new_floor']}")
+                    f"{Decimal(ev['old_multiplier']) / Decimal(ev['new_multiplier']):.6f}; floor {ev['old_floor']} -> {ev['new_floor']}; ceiling {ev['old_ceiling']} -> {ev['new_ceiling']}"
+                    + (f" ({ev['ceiling_note']})" if ev.get("ceiling_note") else ""))
                 tag = order_tag(o)
             o["last_price_usd"] = str(price)
-            if price > Decimal(o["floor_price_usd"]):
-                o["breach_count"], o["status"] = 0, "armed"
-                o["last_decision"] = f"hold: {price:.4f} is above floor {o['floor_price_usd']}"
+            side = side_of(o, price)
+            if side is None:
+                o["breach_count"], o["status"], o["breach_side"], o["triggered_side"] = 0, "armed", None, None
+                o["last_decision"] = f"hold: {price:.4f} is inside the {band_text(o)}" if None not in thresholds(o) else \
+                    (f"hold: {price:.4f} is above floor {o['floor_price_usd']}" if thresholds(o)[0] is not None else f"hold: {price:.4f} is below ceiling {o['ceiling_price_usd']}")
             else:
-                count_breach(o, o_session, now_utc.timestamp())
+                count_breach(o, o_session, now_utc.timestamp(), side)
                 need = o_rules["confirmations"]
+                beyond = f"at or below floor {o['floor_price_usd']}" if side == "floor" else f"at or above ceiling {o['ceiling_price_usd']}"
                 if o["breach_count"] >= need:
-                    o["status"] = "triggered"
-                    o["last_decision"] = f"triggered: breach {o['breach_count']}/{need} in {o_session}, {price:.4f} at or below floor"
+                    o["status"], o["triggered_side"] = "triggered", side
+                    o["last_decision"] = f"triggered ({'stop' if side == 'floor' else 'take profit'}): breach {o['breach_count']}/{need} in {o_session}, {price:.4f} {beyond}"
                 else:
-                    o["last_decision"] = f"breach {o['breach_count']}/{need} in {o_session}: {price:.4f} at or below floor; waiting for confirmation"
+                    o["last_decision"] = f"breach {o['breach_count']}/{need} in {o_session}: {price:.4f} {beyond}; waiting for confirmation"
             log(f"{tag} {o['last_decision']}")
         except Exception as exc:  # noqa: BLE001
             o["last_decision"] = f"error evaluating: {exc}"
