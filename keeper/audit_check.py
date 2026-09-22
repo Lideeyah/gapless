@@ -239,4 +239,7 @@ check("4a app-side revoke survives the keeper's stale evaluation; a keeper that 
       f"stale triggered vs fresh revoked -> {merged[0]['status']}; executing vs revoked -> {merged2[0]['status']}; untouched -> {merged3[0]['status']}")
 
 print("\n%d/%d passed" % (sum(1 for r in results if r[1]), len(results)))
+print(f"\n{sum(r[1] for r in results)}/{len(results)} passed")
+if not results:
+    print('NO CHECKS EXECUTED: treating as failure'); sys.exit(2)
 sys.exit(0 if all(r[1] for r in results) else 1)

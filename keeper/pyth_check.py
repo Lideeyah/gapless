@@ -128,4 +128,6 @@ check("6c the evaluation step (breach counting, triggering) never reads Pyth", "
 check("6d market-hours flag can only tighten the session", "max((labelled, live), key=STRICTNESS.get)" in open(os.path.join(ROOT, "keeper", "market_hours.py")).read(), "strictest of label and live reading")
 
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} passed")
+if not results:
+    print('NO CHECKS EXECUTED: treating as failure'); sys.exit(2)
 sys.exit(0 if all(ok for _, ok in results) else 1)

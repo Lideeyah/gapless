@@ -89,4 +89,7 @@ check("guard runs before execution for already-triggered orders", routed == 0 an
 o, routed, log = cycle(fresh_order(), LIVE, 215.0, "open")
 check("control: clean mint evaluates normally", o["blocked"] is None and o["last_decision"].startswith("hold"), log[-1])
 print("\n%d/%d passed" % (sum(1 for r in results if r[1]), len(results)))
+print(f"\n{sum(r[1] for r in results)}/{len(results)} passed")
+if not results:
+    print('NO CHECKS EXECUTED: treating as failure'); sys.exit(2)
 sys.exit(0 if all(r[1] for r in results) else 1)

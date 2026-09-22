@@ -171,4 +171,6 @@ f.price = Decimal("121"); o4, log4 = cycle(f, *o3, session="open", dry=True)
 check("3i' after the confirmed 2-for-1 the rebased ceiling is live: 121 trips it (open, 1 confirmation)", o4[0]["status"] == "triggered" and o4[0]["triggered_side"] == "ceiling", dec(log4[-2]))
 
 print(f"\n{sum(ok for _, ok in results)}/{len(results)} passed")
+if not results:
+    print('NO CHECKS EXECUTED: treating as failure'); sys.exit(2)
 sys.exit(0 if all(ok for _, ok in results) else 1)
