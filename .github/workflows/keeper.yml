@@ -48,6 +48,11 @@ jobs:
           if [ "${KEEPER_DRY_RUN}" = "1" ]; then python keeper/keeper.py; exit 0; fi   # a dry run is one pass and never owns the chain
           end=$((SECONDS + 5*3600 + 40*60))
           while [ "$SECONDS" -lt "$end" ]; do
+            # pick up whatever is on main before each pass, so a push is live within five minutes without restarting the run
+            if timeout 60 git fetch -q origin main 2>/dev/null; then
+              if ! git diff --quiet HEAD origin/main -- keeper/requirements.txt; then pip install -q -r <(git show origin/main:keeper/requirements.txt) || true; fi
+              git checkout -q origin/main -- keeper pyth.py recorder.py 2>/dev/null || echo "could not refresh code; running the checked-out version"
+            fi
             python keeper/keeper.py || echo "keeper exited non-zero; continuing"
             sleep $((300 - $(date +%s) % 300))
           done
