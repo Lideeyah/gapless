@@ -8831,3 +8831,6 @@ timestamp_utc,ticker,jupiter_price_usd,market_open,equity_feed,equity_price,equi
 2026-10-01T04:05:00Z,NVDAx,230.37398197079176,0,Equity.US.NVDA/USD,,,,not_entitled,Crypto.NVDAX/USD,,,,not_entitled
 2026-10-01T04:05:00Z,TSLAx,356.8371822311032,0,Equity.US.TSLA/USD,357.07000000000005,0.05500000000000001,2026-10-01T04:05:01Z,ok,Crypto.TSLAX/USD,,,,not_entitled
 2026-10-01T04:05:00Z,SPYx,765.8019921919727,0,Equity.US.SPY/USD,,,,not_entitled,Crypto.SPYX/USD,,,,not_entitled
+2026-10-01T04:10:00Z,NVDAx,230.53165346738038,0,Equity.US.NVDA/USD,,,,not_entitled,Crypto.NVDAX/USD,,,,not_entitled
+2026-10-01T04:10:00Z,TSLAx,357.17626313462944,0,Equity.US.TSLA/USD,357.425,0.025,2026-10-01T04:10:01Z,ok,Crypto.TSLAX/USD,,,,not_entitled
+2026-10-01T04:10:00Z,SPYx,765.8366121733135,0,Equity.US.SPY/USD,,,,not_entitled,Crypto.SPYX/USD,,,,not_entitled
