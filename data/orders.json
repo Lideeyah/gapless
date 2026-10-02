@@ -277,33 +277,44 @@
       "decimals": 8,
       "floor_price_usd": "215",
       "ceiling_price_usd": "233",
-      "status": "executing",
-      "breach_count": 2,
+      "status": "filled",
+      "breach_count": 0,
       "last_checked_at": "2026-10-02T09:40:01Z",
       "delegation_sig": "2W8hWqnyiRHm6f37kX16iB5vVatwBwGoFCdF3JobD35kygs3DJDGF43HgWUSmyv2CECWYVSJTA55cTXdk2gdzzSR",
-      "fill_sig": null,
-      "fill_price_usd": null,
-      "filled_at": null,
+      "fill_sig": "241V3xQ1KeKGAA4CeNwKkyXPhQCCcA75QTqCBj4dAM1fjvrvfNHhDQUrnMJXf6fDh1MmWhTu55qR3eB89B2XT3Ry",
+      "fill_price_usd": "233.264052",
+      "filled_at": "2026-10-02T09:40:06Z",
       "failure_reason": null,
       "created_at": "2026-09-22T11:09:31Z",
       "order_sig": "5rDdesSXqoCPggGhdfZ3EW5aHEaqNfNo11dzHjxSxHP3ZMKbzpBzCjnczddjokJqfZ4g6b4FNMKwYro996zdRhxG",
       "delegate": "HbJ7XbcY2VsunoeK9v6o3FwKGvwfTBQ7horU9d3fonKs",
-      "remaining_raw": "882621",
-      "fills": [],
-      "last_decision": "executing 882621 raw, pending 241V3xQ1KeKGAA4CeNwKkyXPhQCCcA75QTqCBj4dAM1fjvrvfNHhDQUrnMJXf6fDh1MmWhTu55qR3eB89B2XT3Ry",
+      "remaining_raw": "0",
+      "fills": [
+        {
+          "at": "2026-10-02T09:40:06Z",
+          "signature": "241V3xQ1KeKGAA4CeNwKkyXPhQCCcA75QTqCBj4dAM1fjvrvfNHhDQUrnMJXf6fDh1MmWhTu55qR3eB89B2XT3Ry",
+          "in_raw": "882621",
+          "out_usdc_raw": "2062340",
+          "fill_price_usd": "233.264052",
+          "session": "overnight",
+          "side": "ceiling",
+          "kind": "take profit"
+        }
+      ],
+      "last_decision": "filled (take profit): 882621 raw sold at 233.264052 USDC, signature 241V3xQ1KeKGAA4CeNwKkyXPhQCCcA75QTqCBj4dAM1fjvrvfNHhDQUrnMJXf6fDh1MmWhTu55qR3eB89B2XT3Ry",
       "last_session": "overnight",
       "last_price_usd": "233.34374901453688",
-      "pending_sig": "241V3xQ1KeKGAA4CeNwKkyXPhQCCcA75QTqCBj4dAM1fjvrvfNHhDQUrnMJXf6fDh1MmWhTu55qR3eB89B2XT3Ry",
-      "pending_amount_raw": "882621",
-      "pending_since": "2026-10-02T09:40:02Z",
+      "pending_sig": null,
+      "pending_amount_raw": null,
+      "pending_since": null,
       "revoke_sig": null,
       "multiplier": "1.001701196801074",
       "rebases": [],
       "blocked": null,
       "multiplier_event": null,
       "last_session_source": "pyth",
-      "breach_side": "ceiling",
-      "triggered_side": "ceiling",
+      "breach_side": null,
+      "triggered_side": null,
       "breach_session": "overnight",
       "breach_last_at": "2026-10-02T09:40:01Z",
       "pyth_check": {
@@ -316,8 +327,8 @@
         },
         "status": "not_entitled"
       },
-      "pending_last_valid_block_height": 430611175,
-      "pending_multiplier": "1.001701196801074"
+      "pending_last_valid_block_height": null,
+      "pending_multiplier": null
     }
   ]
 }
